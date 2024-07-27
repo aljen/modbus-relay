@@ -17,7 +17,6 @@ int main(int argc, char **argv) {
     load_config_from_file("/etc/modbus_relay.json");
 
     const auto &config = get_config();
-    const auto config_to_json(config);
 
     auto modbus_ctx = init_modbus_rtu();
 
