@@ -60,6 +60,10 @@ MODBUS TCP/IP server that translates incoming requests to RTU and relays them to
 
 - [ ] Handle multiple connections
 
+- [ ] CI/CD
+
+- [ ] Debian/ArchLinux packages
+
 - [ ] systemd service
 
 ## Documentation
