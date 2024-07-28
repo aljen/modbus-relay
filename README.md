@@ -1,7 +1,7 @@
 
 # modbus-relay
 
-MODBUS TCP/IP server that translates incoming requests to RTU and relays them to configured serial device.
+Modbus TCP/IP server that translates incoming requests to RTU and relays them to configured serial device.
 
 > [!CAUTION]
 > 🚧 This project is still in WIP 🚧
@@ -31,7 +31,7 @@ MODBUS TCP/IP server that translates incoming requests to RTU and relays them to
 - Made with modern C++23
 - [cmake](https://cmake.org) for building
 - [ASIO](https://think-async.com/Asio/) for networking/io
-- [libmodbus](https://github.com/stephane/libmodbus) for MODBUS
+- [libmodbus](https://github.com/stephane/libmodbus) for Modbus
 - [spdlog](https://github.com/gabime/spdlog) for logging
 - [fmt](https://github.com/fmtlib/fmt) for formatting
 - [nlohmann_json](https://github.com/nlohmann/json) for JSON
