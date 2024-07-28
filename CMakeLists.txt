@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(modbus_relay)
+project(modbus-relay)
 
 set(CMAKE_CXX_STANDARD 23)
 
@@ -14,7 +14,7 @@ pkg_check_modules(NJSON REQUIRED nlohmann_json)
 pkg_check_modules(ASIO REQUIRED asio)
 pkg_check_modules(MODBUS REQUIRED libmodbus)
 
-add_executable(modbus_relay
+add_executable(modbus-relay
         config.cc
         config.h
         main.cc
@@ -25,7 +25,7 @@ add_executable(modbus_relay
         utils.h
 )
 
-target_include_directories(modbus_relay
+target_include_directories(modbus-relay
     SYSTEM PRIVATE
         ${ASIO_INCLUDE_DIRS}
         ${FMT_INCLUDE_DIRS}
@@ -33,7 +33,7 @@ target_include_directories(modbus_relay
         ${NJSON_INCLUDE_DIRS}
         ${SPDLOG_INCLUDE_DIRS}
 )
-target_link_libraries(modbus_relay
+target_link_libraries(modbus-relay
     PRIVATE
         ${ASIO_LINK_LIBRARIES}
         ${FMT_LINK_LIBRARIES}

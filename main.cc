@@ -14,7 +14,7 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    load_config_from_file("/etc/modbus_relay.json");
+    load_config_from_file("/etc/modbus-relay.json");
 
     const auto &config = get_config();
 

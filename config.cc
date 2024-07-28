@@ -184,7 +184,7 @@ bool load_config_from_file(std::string_view path)
     if (!exists(file_path)) {
         spdlog::warn("Configuration file {} not found, using default values.", path);
         spdlog::warn("Consider running with:");
-        spdlog::warn("modbus_relay -dump-default-config > {}", path);
+        spdlog::warn("modbus-relay -dump-default-config > {}", path);
         return false;
     }
 

@@ -22,7 +22,7 @@ Modbus TCP/IP server that translates incoming requests to RTU and relays them to
 - Exposes RTU device via TCP/IP
 - Option to flush after every write[^1]
 - Option to manual control of RTS[^1]
-- Simple configuration via JSON in `/etc/modbus_relay.json`
+- Simple configuration via JSON in `/etc/modbus-relay.json`
 
 [^1]: Needed for a device I was working with
 
