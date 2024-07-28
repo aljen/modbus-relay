@@ -1,10 +1,10 @@
 
 # modbus-relay
 
-Modbus TCP/IP server that translates incoming requests to RTU and relays them to configured serial device.
+MODBUS TCP/IP server that translates incoming requests to RTU and relays them to configured serial device.
 
 > [!CAUTION]
-> 🚧 This is project is still in WIP 🚧
+> 🚧 This project is still in WIP 🚧
 
 ## Demo
 
