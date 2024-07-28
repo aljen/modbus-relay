@@ -46,7 +46,7 @@ Modbus TCP/IP server that translates incoming requests to RTU and relays them to
 
 - [ ] Handle function code **0x03** - Read Holding Registers
 
-- [ ] Handle function code **0x04** - Read Input Registers
+- [X] Handle function code **0x04** - Read Input Registers
 
 - [ ] Handle function code **0x05** - Force Single Coil
 
@@ -57,6 +57,8 @@ Modbus TCP/IP server that translates incoming requests to RTU and relays them to
 - [ ] Handle function code **0x10** - Preset Multiple Registers
 
 - [ ] Handle function code **0x10** - Preset Multiple Registers
+
+- [ ] Handle multiple connections
 
 - [ ] systemd service
 
