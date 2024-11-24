@@ -2,11 +2,7 @@ use clap::{Args, Parser};
 use std::path::PathBuf;
 use tracing::info;
 
-mod modbus_relay;
-mod relay_config;
-mod rtu_transport;
-
-use crate::{modbus_relay::ModbusRelay, relay_config::RelayConfig};
+use modbus_relay::{ModbusRelay, RelayConfig};
 
 #[derive(Parser)]
 #[command(author, version, about)]
