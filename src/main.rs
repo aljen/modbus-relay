@@ -1,6 +1,7 @@
 use clap::{Args, Parser};
 use std::path::PathBuf;
-use tracing::info;
+use tracing::{info, Level};
+use tracing_subscriber::FmtSubscriber;
 
 use modbus_relay::{ModbusRelay, RelayConfig};
 
@@ -25,7 +26,16 @@ struct CommonArgs {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
-    tracing_subscriber::fmt::init();
+    FmtSubscriber::builder()
+        .with_max_level(Level::DEBUG)
+        .with_line_number(true)
+        .with_file(true)
+        .with_target(false)
+        .with_thread_ids(true)
+        .with_thread_names(true)
+        .with_ansi(true)
+        .pretty()
+        .init();
 
     // Parse command line args
     let cli = Cli::parse();

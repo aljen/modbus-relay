@@ -28,6 +28,7 @@ maintenance = { status = "actively-developed" }
 
 [dependencies]
 clap = { version = "4.5.21", features = ["derive"] }
+libc = "0.2.164"
 rmodbus = "0.9.9"
 serde = { version = "1.0.215", features = ["derive"] }
 serde_json = "1.0.133"
