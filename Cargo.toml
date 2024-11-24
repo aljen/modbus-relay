@@ -6,23 +6,72 @@ authors = ["Artur Wyszyński <artur.wyszynski@wildpixelgames.com>"]
 description = "A high performance Modbus TCP to RTU relay"
 homepage = "https://github.com/aljen/modbus-relay"
 repository = "https://github.com/aljen/modbus-relay"
+documentation = "https://docs.rs/modbus-relay"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
-exclude = [".github/**/*"]
-keywords = ["hardware", "modbus", "client", "server"]
-categories = ["embedded", "hardware-support"]
+rust-version = "1.70"
+keywords = ["hardware", "modbus", "client", "server", "relay"]
+categories = ["embedded", "hardware-support", "network-programming"]
+
+exclude = [
+  ".github/**/*",
+  "docs/**/*",
+  "tests/**/*",
+  "examples/**/*",
+  "benches/**/*",
+]
+
+include = ["src/**/*", "LICENSE*", "README.md", "CHANGELOG.md"]
+
+[badges]
+maintenance = { status = "actively-developed" }
 
 [dependencies]
 clap = { version = "4.5.21", features = ["derive"] }
 rmodbus = "0.9.9"
 serde = { version = "1.0.215", features = ["derive"] }
 serde_json = "1.0.133"
-serialport = "4.2"
+serialport = "4.6.0"
 thiserror = "2.0.3"
 tokio = { version = "1.41.1", features = ["full"] }
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
 
+[profile.release]
+lto = true        # Link Time Optimization
+codegen-units = 1 # Maximize size reduction optimizations
+opt-level = 3     # Maximum optimization
+panic = 'abort'   # Remove panic unwinding code
+strip = true      # Remove debug symbols
+
+[profile.dev]
+opt-level = 0 # No optimizations for faster compilation
+debug = true  # Full debug info
+
 [features]
 default = []
 rts = []
+
+# TODO:
+# debug-logging - includes debug logging
+# metrics - includes metrics for Prometheus
+# tls - adds TLS support
+
+[[bin]]
+name = "modbus-relay"
+path = "src/main.rs"
+
+[lib]
+name = "modbus_relay"
+path = "src/lib.rs"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.release]
+sign-commit = true
+sign-tag = true
+pre-release-commit-message = "chore: release {{version}}"
+tag-message = "release: {{version}}"
+tag-name = "v{{version}}"
