@@ -2,8 +2,15 @@
 name = "modbus-relay"
 version = "0.1.0"
 edition = "2021"
+authors = ["Artur Wyszyński <artur.wyszynski@wildpixelgames.com>"]
 description = "A high performance Modbus TCP to RTU relay"
+homepage = "https://github.com/aljen/modbus-relay"
+repository = "https://github.com/aljen/modbus-relay"
+readme = "README.md"
 license = "MIT OR Apache-2.0"
+exclude = [".github/**/*"]
+keywords = ["hardware", "modbus", "client", "server"]
+categories = ["embedded", "hardware-support"]
 
 [dependencies]
 clap = { version = "4.5.21", features = ["derive"] }
