@@ -1,9 +1,8 @@
 use clap::{Args, Parser};
 use std::{path::PathBuf, sync::Arc};
-use tracing::{error, info, Level};
-use tracing_subscriber::FmtSubscriber;
+use tracing::{error, info};
 
-use modbus_relay::{ModbusRelay, RelayConfig};
+use modbus_relay::{setup_logging, ModbusRelay, RelayConfig};
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -25,18 +24,6 @@ struct CommonArgs {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging
-    FmtSubscriber::builder()
-        .with_max_level(Level::DEBUG)
-        .with_line_number(true)
-        .with_file(true)
-        .with_target(false)
-        .with_thread_ids(true)
-        .with_thread_names(true)
-        .with_ansi(true)
-        .pretty()
-        .init();
-
     // Parse command line args
     let cli = Cli::parse();
 
@@ -46,21 +33,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // Load config
-    let config = if cli.common.config.exists() {
-        info!("Loading config from {}", cli.common.config.display());
-        let content = std::fs::read_to_string(&cli.common.config)?;
-        let config: RelayConfig = serde_json::from_str(&content)?;
-        config.validate()?;
-        config
+    // Load and validate configuration
+    let config = if cli.common.dump_default {
+        println!("{}", serde_json::to_string_pretty(&RelayConfig::default())?);
+        return Ok(());
     } else {
-        info!("Config file not found, using defaults");
-        info!(
-            "Consider running with --dump-default-config > {}",
-            cli.common.config.display()
-        );
-        RelayConfig::default()
+        RelayConfig::load(Some(&cli.common.config))?
     };
+
+    setup_logging(&config)?;
 
     // Create and run relay
     let relay = Arc::new(ModbusRelay::new(config)?);

@@ -88,16 +88,23 @@ impl RtuTransport {
 
     #[cfg(feature = "rts")]
     fn set_rts(&self, on: bool) -> Result<(), TransportError> {
-        // Get raw fd from the port
+        let rts_span = tracing::info_span!(
+            "rts_control",
+            signal = if on { "HIGH" } else { "LOW" },
+            delay_us = self.config.rtu_rts_delay_us,
+        );
+        let _enter = rts_span.enter();
 
         unsafe {
             let mut flags = 0i32;
 
             // Get current flags
             if libc::ioctl(self.raw_fd, TIOCMGET, &mut flags) < 0 {
+                let err = std::io::Error::last_os_error();
                 return Err(TransportError::Rts(RtsError::signal(format!(
-                    "Failed to get RTS flags: {}",
-                    std::io::Error::last_os_error()
+                    "Failed to get RTS flags: {} (errno: {})",
+                    err,
+                    err.raw_os_error().unwrap_or(-1)
                 ))));
             }
 
@@ -110,9 +117,11 @@ impl RtuTransport {
 
             // Set new flags
             if libc::ioctl(self.raw_fd, TIOCMSET, &flags) < 0 {
+                let err = std::io::Error::last_os_error();
                 return Err(TransportError::Rts(RtsError::signal(format!(
-                    "Failed to set RTS flags: {}",
-                    std::io::Error::last_os_error()
+                    "Failed to set RTS flags: {} (errno: {})",
+                    err,
+                    err.raw_os_error().unwrap_or(-1)
                 ))));
             }
 

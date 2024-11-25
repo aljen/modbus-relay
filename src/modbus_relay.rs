@@ -15,6 +15,7 @@ use crate::{
         ClientErrorKind, ConfigValidationError, ConnectionError, FrameErrorKind, ProtocolErrorKind,
         RelayError,
     },
+    generate_request_id,
     relay_config::RelayConfig,
     rtu_transport::RtuTransport,
     IoOperation, ModbusProcessor, TransportError,
@@ -273,6 +274,16 @@ async fn handle_client(
     manager: &ConnectionManager,
     peer_addr: SocketAddr,
 ) -> Result<(), RelayError> {
+    let request_id = generate_request_id();
+
+    let client_span = tracing::info_span!(
+        "client_connection",
+        %peer_addr,
+        request_id = %request_id,
+        protocol = "modbus_tcp"
+    );
+    let _enter = client_span.enter();
+
     socket.set_nodelay(true).map_err(|e| {
         RelayError::Transport(TransportError::Io {
             operation: IoOperation::Configure,

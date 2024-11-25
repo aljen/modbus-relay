@@ -1,9 +1,46 @@
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use tracing::{info, level_filters::LevelFilter};
 
-use crate::{errors::ConfigValidationError, RelayError};
+use crate::{
+    errors::{ConfigValidationError, InitializationError},
+    RelayError,
+};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogConfig {
+    /// Enable trace-level logging for frame contents
+    #[serde(default)]
+    pub trace_frames: bool,
+
+    /// Minimum log level for console output
+    #[serde(default = "default_log_level")]
+    pub log_level: String,
+
+    /// Whether to include source code location in logs
+    #[serde(default = "default_true")]
+    pub include_location: bool,
+}
+
+impl Default for LogConfig {
+    fn default() -> Self {
+        Self {
+            trace_frames: false,
+            log_level: default_log_level(),
+            include_location: true,
+        }
+    }
+}
+
+fn default_log_level() -> String {
+    "info".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -163,6 +200,9 @@ pub struct RelayConfig {
 
     /// Enable hexdump of frames in trace logs
     pub trace_frames: bool,
+
+    // Log configuration
+    pub log: LogConfig,
 }
 
 impl Default for RelayConfig {
@@ -189,12 +229,112 @@ impl Default for RelayConfig {
 
             max_frame_size: 256,
             trace_frames: false,
+
+            log: LogConfig::default(),
+        }
+    }
+}
+
+impl LogConfig {
+    /// Validates the configuration
+    pub fn validate(&self) -> Result<(), InitializationError> {
+        // Validate log level
+        match self.log_level.to_lowercase().as_str() {
+            "error" | "warn" | "info" | "debug" | "trace" => Ok(()),
+            _ => Err(InitializationError::logging(format!(
+                "Invalid log level: {}",
+                self.log_level
+            ))),
+        }
+    }
+
+    pub fn get_level_filter(&self) -> LevelFilter {
+        match self.log_level.to_lowercase().as_str() {
+            "error" => LevelFilter::ERROR,
+            "warn" => LevelFilter::WARN,
+            "info" => LevelFilter::INFO,
+            "debug" => LevelFilter::DEBUG,
+            "trace" => LevelFilter::TRACE,
+            _ => LevelFilter::INFO,
         }
     }
 }
 
 impl RelayConfig {
+    /// Loads configuration with the following precedence:
+    /// 1. Environment variables
+    /// 2. Config file
+    /// 3. Default values
+    pub fn load(config_path: Option<&Path>) -> Result<Self, RelayError> {
+        // Start with default config
+        let mut config = if let Some(path) = config_path {
+            if path.exists() {
+                info!("Loading config from {}", path.display());
+                let content = std::fs::read_to_string(path).map_err(|e| {
+                    RelayError::Init(InitializationError::config(format!(
+                        "Failed to read config file: {}",
+                        e
+                    )))
+                })?;
+                serde_json::from_str(&content).map_err(|e| {
+                    RelayError::Init(InitializationError::config(format!(
+                        "Failed to parse config file: {}",
+                        e
+                    )))
+                })?
+            } else {
+                info!("Config file not found, using defaults");
+                Self::default()
+            }
+        } else {
+            info!("No config file specified, using defaults");
+            Self::default()
+        };
+
+        // Override with environment variables if present
+        if let Ok(addr) = std::env::var("MODBUS_TCP_BIND_ADDR") {
+            config.tcp_bind_addr = addr;
+        }
+
+        if let Ok(port_str) = std::env::var("MODBUS_TCP_BIND_PORT") {
+            if let Ok(port) = port_str.parse() {
+                config.tcp_bind_port = port;
+            }
+        }
+
+        if let Ok(device) = std::env::var("MODBUS_RTU_DEVICE") {
+            config.rtu_device = device;
+        }
+
+        if let Ok(baud_str) = std::env::var("MODBUS_RTU_BAUD_RATE") {
+            if let Ok(baud) = baud_str.parse() {
+                config.rtu_baud_rate = baud;
+            }
+        }
+
+        // RTS settings
+        #[cfg(feature = "rts")]
+        if let Ok(delay_str) = std::env::var("MODBUS_RTS_DELAY_US") {
+            if let Ok(delay) = delay_str.parse() {
+                config.rtu_rts_delay_us = delay;
+            }
+        }
+
+        // Logging settings
+        if let Ok(level) = std::env::var("MODBUS_LOG_LEVEL") {
+            config.log.log_level = level;
+        }
+
+        // Validate the final configuration
+        config.validate()?;
+
+        Ok(config)
+    }
+
     pub fn validate(&self) -> Result<(), RelayError> {
+        // Validate logging configuration first
+        self.log.validate().map_err(RelayError::Init)?;
+
         // TCP validation
         if self.tcp_bind_addr.parse::<std::net::IpAddr>().is_err() {
             return Err(RelayError::Config(ConfigValidationError::tcp(format!(
@@ -297,9 +437,16 @@ impl RelayConfig {
             serial_timeout: Duration::from_millis(500),
             max_frame_size: 256,
             trace_frames: false,
+
+            log: LogConfig::default(),
         };
 
+        // Validate entire config including logging
         config.validate()?;
+
+        // Double check logging config specifically since it's critical
+        config.log.validate().map_err(RelayError::Init)?;
+
         Ok(config)
     }
 
@@ -354,6 +501,79 @@ mod duration_millis {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn test_config_load_defaults() {
+        let config = RelayConfig::load(None).unwrap();
+        assert_eq!(config.tcp_bind_addr, "0.0.0.0");
+        assert_eq!(config.tcp_bind_port, 5000);
+    }
+
+    #[test]
+    fn test_config_load_from_env() {
+        std::env::set_var("MODBUS_TCP_BIND_ADDR", "127.0.0.1");
+        std::env::set_var("MODBUS_TCP_BIND_PORT", "8080");
+        std::env::set_var("MODBUS_RTU_DEVICE", "/dev/ttyUSB0");
+
+        let config = RelayConfig::load(None).unwrap();
+
+        assert_eq!(config.tcp_bind_addr, "127.0.0.1");
+        assert_eq!(config.tcp_bind_port, 8080);
+        assert_eq!(config.rtu_device, "/dev/ttyUSB0");
+
+        // Cleanup
+        std::env::remove_var("MODBUS_TCP_BIND_ADDR");
+        std::env::remove_var("MODBUS_TCP_BIND_PORT");
+        std::env::remove_var("MODBUS_RTU_DEVICE");
+    }
+
+    #[test]
+    fn test_config_load_from_file() {
+        let temp_dir = tempdir::TempDir::new("modbusrelay-test").unwrap();
+        let config_path = temp_dir.path().join("config.json");
+
+        let test_config = RelayConfig {
+            tcp_bind_addr: "192.168.1.1".to_string(),
+            tcp_bind_port: 9999,
+            ..Default::default()
+        };
+
+        std::fs::write(
+            &config_path,
+            serde_json::to_string_pretty(&test_config).unwrap(),
+        )
+        .unwrap();
+
+        let loaded_config = RelayConfig::load(Some(&config_path)).unwrap();
+        assert_eq!(loaded_config.tcp_bind_addr, "192.168.1.1");
+        assert_eq!(loaded_config.tcp_bind_port, 9999);
+    }
+
+    #[test]
+    fn test_config_env_overrides_file() {
+        let temp_dir = tempdir::TempDir::new("modbusrelay-test").unwrap();
+        let config_path = temp_dir.path().join("config.json");
+
+        let test_config = RelayConfig {
+            tcp_bind_addr: "192.168.1.1".to_string(),
+            tcp_bind_port: 9999,
+            ..Default::default()
+        };
+
+        std::fs::write(
+            &config_path,
+            serde_json::to_string_pretty(&test_config).unwrap(),
+        )
+        .unwrap();
+
+        std::env::set_var("MODBUS_TCP_BIND_ADDR", "127.0.0.1");
+
+        let loaded_config = RelayConfig::load(Some(&config_path)).unwrap();
+        assert_eq!(loaded_config.tcp_bind_addr, "127.0.0.1"); // From env
+        assert_eq!(loaded_config.tcp_bind_port, 9999); // From file
+
+        std::env::remove_var("MODBUS_TCP_BIND_ADDR");
+    }
 
     #[test]
     fn test_valid_config() {

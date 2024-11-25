@@ -29,6 +29,9 @@ pub enum RelayError {
         client_addr: std::net::SocketAddr,
         details: String,
     },
+
+    #[error("Initialization error: {0}")]
+    Init(#[from] InitializationError),
 }
 
 #[derive(Error, Debug)]
@@ -66,6 +69,23 @@ pub enum TransportError {
 
     #[error("RTS error: {0}")]
     Rts(#[from] RtsError),
+}
+
+#[derive(Error, Debug)]
+pub enum InitializationError {
+    #[error("Logging initialization error: {0}")]
+    Logging(String),
+
+    #[error("Configuration initialization error: {0}")]
+    Config(String),
+
+    #[error("System initialization error: {kind} - {details}")]
+    System {
+        kind: SystemErrorKind,
+        details: String,
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
 }
 
 #[derive(Error, Debug)]
@@ -129,6 +149,15 @@ pub enum RtsError {
 
     #[error("RTS system error: {0}")]
     SystemError(#[from] std::io::Error),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemErrorKind {
+    ResourceAllocation,
+    PermissionDenied,
+    FileSystem,
+    Network,
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,6 +253,48 @@ pub enum IoOperation {
     Flush,
     Configure,
     Control,
+}
+
+impl InitializationError {
+    pub fn logging(msg: impl Into<String>) -> Self {
+        Self::Logging(msg.into())
+    }
+
+    pub fn config(msg: impl Into<String>) -> Self {
+        Self::Config(msg.into())
+    }
+
+    pub fn system(kind: SystemErrorKind, details: impl Into<String>) -> Self {
+        Self::System {
+            kind,
+            details: details.into(),
+            source: None,
+        }
+    }
+
+    pub fn system_with_source(
+        kind: SystemErrorKind,
+        details: impl Into<String>,
+        source: impl Into<Box<dyn std::error::Error + Send + Sync>>,
+    ) -> Self {
+        Self::System {
+            kind,
+            details: details.into(),
+            source: Some(source.into()),
+        }
+    }
+}
+
+impl std::fmt::Display for SystemErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ResourceAllocation => write!(f, "Resource allocation error"),
+            Self::PermissionDenied => write!(f, "Permission denied"),
+            Self::FileSystem => write!(f, "Filesystem error"),
+            Self::Network => write!(f, "Network error"),
+            Self::Other => write!(f, "Other system error"),
+        }
+    }
 }
 
 impl std::fmt::Display for FrameSizeKind {
