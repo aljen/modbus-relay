@@ -178,7 +178,7 @@ impl Default for RelayConfig {
             stop_bits: StopBits::One,
 
             #[cfg(feature = "rts")]
-            rtu_rts_type: RtsType::Up,
+            rtu_rts_type: RtsType::Down,
             #[cfg(feature = "rts")]
             rtu_rts_delay_us: 3500,
 
@@ -196,7 +196,7 @@ impl Default for RelayConfig {
 impl RelayConfig {
     pub fn validate(&self) -> Result<(), RelayError> {
         // TCP validation
-        if !self.tcp_bind_addr.parse::<std::net::IpAddr>().is_ok() {
+        if self.tcp_bind_addr.parse::<std::net::IpAddr>().is_err() {
             return Err(RelayError::Config(ConfigValidationError::tcp(format!(
                 "Invalid TCP bind address: {}",
                 self.tcp_bind_addr
