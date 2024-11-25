@@ -1,4 +1,3 @@
-use hex;
 use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -11,12 +10,12 @@ use tracing::{debug, error, info};
 use crate::{
     connection_manager::{ConnectionConfig, ConnectionManager},
     errors::{
-        ClientErrorKind, ConfigValidationError, ConnectionError, FrameError, FrameErrorKind,
-        ProtocolErrorKind, RelayError,
+        ClientErrorKind, ConfigValidationError, ConnectionError, FrameErrorKind, ProtocolErrorKind,
+        RelayError,
     },
     relay_config::RelayConfig,
     rtu_transport::RtuTransport,
-    IoOperation, TransportError,
+    IoOperation, ModbusProcessor, TransportError,
 };
 
 pub struct ModbusRelay {
@@ -169,22 +168,6 @@ impl ModbusRelay {
     }
 }
 
-fn calc_crc16(frame: &[u8], data_length: u8) -> u16 {
-    let mut crc: u16 = 0xffff;
-    for i in frame.iter().take(data_length as usize) {
-        crc ^= u16::from(*i);
-        for _ in (0..8).rev() {
-            if (crc & 0x0001) == 0 {
-                crc >>= 1;
-            } else {
-                crc >>= 1;
-                crc ^= 0xA001;
-            }
-        }
-    }
-    crc
-}
-
 async fn handle_client(
     mut socket: TcpStream,
     transport: Arc<RtuTransport>,
@@ -210,6 +193,7 @@ async fn handle_client(
     info!("New client connected from {}", addr);
 
     let (mut reader, mut writer) = socket.split();
+    let modbus = ModbusProcessor::new(transport);
 
     loop {
         let mut tcp_buf = vec![0u8; 256];
@@ -281,87 +265,26 @@ async fn handle_client(
             ));
         }
 
-        // Convert TCP to RTU
-        let mut rtu_request = Vec::with_capacity(256);
-        rtu_request.push(tcp_buf[6]); // Unit ID
-        rtu_request.extend_from_slice(&tcp_buf[7..n]); // Function code and data
-
-        let crc = calc_crc16(&rtu_request, rtu_request.len() as u8);
-        rtu_request.extend_from_slice(&crc.to_le_bytes());
-
-        debug!(
-            "Sending RTU request to device: data={:02X?}, crc={:04X}",
-            &rtu_request[..rtu_request.len() - 2],
-            crc
-        );
-
-        // Execute RTU transaction
-        let mut rtu_buf = vec![0u8; 256];
-        let rtu_len = match transport.transaction(&rtu_request, &mut rtu_buf).await {
-            Ok(len) => {
-                if len < 3 {
-                    manager.record_request(peer_addr, false).await;
-                    return Err(RelayError::frame(
-                        FrameErrorKind::TooShort,
-                        format!("RTU response too short: {} bytes", len),
-                        Some(rtu_buf[..len].to_vec()),
-                    ));
-                }
-                len
-            }
+        // Process Modbus request
+        let response = match modbus
+            .process_request(
+                transaction_id,
+                tcp_buf[6],     // Unit ID
+                &tcp_buf[7..n], // PDU
+            )
+            .await
+        {
+            Ok(response) => response,
             Err(e) => {
                 manager.record_request(peer_addr, false).await;
-
-                // Prepare Modbus exception response
-                let mut exception_response = Vec::new();
-                exception_response.extend_from_slice(&transaction_id);
-                exception_response.extend_from_slice(&[0x00, 0x00]);
-                exception_response.extend_from_slice(&[0x00, 0x03]);
-                exception_response.push(tcp_buf[6]);
-                exception_response.push(tcp_buf[7] | 0x80);
-                exception_response.push(0x0B);
-
-                if let Err(e) = writer.write_all(&exception_response).await {
-                    return Err(RelayError::client(
-                        ClientErrorKind::ConnectionLost,
-                        peer_addr,
-                        format!("Failed to send exception response: {}", e),
-                    ));
-                }
-
-                return Err(e.into());
+                return Err(e);
             }
         };
 
-        // Verify RTU CRC
-        let calculated_crc = calc_crc16(&rtu_buf[..rtu_len - 2], (rtu_len - 2) as u8);
-        let received_crc = u16::from_le_bytes([rtu_buf[rtu_len - 2], rtu_buf[rtu_len - 1]]);
-
-        if calculated_crc != received_crc {
-            manager.record_request(peer_addr, false).await;
-            return Err(RelayError::Frame(FrameError::Crc {
-                calculated: calculated_crc,
-                received: received_crc,
-                frame_hex: hex::encode(&rtu_buf[..rtu_len - 2]),
-            }));
-        }
-
-        // Convert RTU to TCP
-        let mut tcp_response = Vec::with_capacity(256);
-        tcp_response.extend_from_slice(&transaction_id);
-        tcp_response.extend_from_slice(&[0x00, 0x00]);
-
-        let tcp_length = (rtu_len - 2) as u16;
-        tcp_response.extend_from_slice(&tcp_length.to_be_bytes());
-        tcp_response.extend_from_slice(&rtu_buf[..rtu_len - 2]);
-
-        debug!(
-            "Sending TCP response to {}: {:02X?}",
-            peer_addr, &tcp_response
-        );
+        debug!("Sending TCP response to {}: {:02X?}", peer_addr, &response);
 
         // Send TCP response with timeout
-        if let Err(_) = timeout(Duration::from_secs(5), writer.write_all(&tcp_response)).await {
+        if (timeout(Duration::from_secs(5), writer.write_all(&response)).await).is_err() {
             manager.record_request(peer_addr, false).await;
             return Err(RelayError::client(
                 ClientErrorKind::Timeout,

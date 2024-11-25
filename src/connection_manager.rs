@@ -436,7 +436,7 @@ mod tests {
 
         // Record some errors
         let error = RelayError::protocol(ProtocolErrorKind::InvalidFunction, "Test error");
-        assert!(manager.record_client_error(&addr, &error).await.is_ok());
+        assert!(manager.record_client_error(&addr).await.is_ok());
 
         // Verify error was recorded
         let stats = manager.get_stats().await.unwrap();
