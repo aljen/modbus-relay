@@ -15,12 +15,38 @@
 - [x] Connection backoff strategy
 - [x] Basic connection handling
 - [x] Connection stats tracking
+- [x] Proper error handling in connection management
+- [x] Fail-fast behavior for connection limits
 - [ ] TCP connection pooling
 - [ ] Advanced connection timeouts and keep-alive
 - [ ] Enhanced health checks
 - [ ] Connection reuse optimization
 
-## 3. Performance Optimization
+## 3. Protocol Handling [DONE]
+
+- [x] Separation of concerns (TCP vs Modbus logic)
+- [x] ModbusProcessor implementation
+- [x] Frame handling
+- [x] Protocol error handling
+- [x] RTU-TCP conversion
+- [x] RTS control (configurable)
+
+## 4. Testing [PARTIALLY DONE]
+
+- [x] Basic unit tests for error handling
+- [x] Connection management tests
+- [x] Proper separation of test responsibilities
+- [ ] ModbusProcessor tests
+- [ ] TCP connection handling tests
+- [ ] Integration tests
+- [ ] Complete unit test coverage
+- [ ] Property-based testing
+- [ ] Fuzz testing for protocol handling
+- [ ] Benchmark tests
+- [ ] Load tests
+- [ ] Chaos testing
+
+## 5. Performance Optimization
 
 - [ ] Buffer pooling
 - [ ] Zero-copy frame handling
@@ -29,50 +55,41 @@
 - [ ] Configurable thread/task pool
 - [ ] Memory usage optimization
 
-## 4. Monitoring & Metrics [PARTIALLY DONE]
+## 6. Monitoring & Metrics [PARTIALLY DONE]
 
 - [x] Basic connection stats
 - [x] Error rate tracking
 - [x] Connection tracking
+- [x] Detailed error reporting
 - [ ] Prometheus metrics integration
 - [ ] Advanced request/response timing metrics
 - [ ] System resource usage monitoring
 - [ ] Alerting integration
 
-## 5. Reliability Features [PARTIALLY DONE]
+## 7. Reliability Features [PARTIALLY DONE]
 
 - [x] Basic rate limiting (per-IP limits)
 - [x] Connection backoff
 - [x] Basic error recovery
+- [x] Proper error propagation
 - [ ] Circuit breaker for RTU device
 - [ ] Automatic reconnection
 - [ ] Request retry mechanism
 - [ ] Advanced backpressure handling
 - [ ] Request prioritization
 
-## 6. Configuration [PARTIALLY DONE]
+## 8. Configuration [PARTIALLY DONE]
 
 - [x] Basic configuration validation
 - [x] JSON config support
+- [x] Enhanced config validation with detailed errors
 - [ ] Dynamic configuration reloading
 - [ ] Environment variable support
 - [ ] YAML/TOML support
 - [ ] Secrets management
 - [ ] Feature flags
 
-## 7. Testing [PARTIALLY DONE]
-
-- [x] Basic unit tests for error handling
-- [x] Connection management tests
-- [ ] Complete unit test coverage
-- [ ] Integration tests
-- [ ] Property-based testing
-- [ ] Fuzz testing for protocol handling
-- [ ] Benchmark tests
-- [ ] Load tests
-- [ ] Chaos testing
-
-## 8. Security
+## 9. Security
 
 - [ ] TLS support for TCP connections
 - [ ] Authentication/Authorization
@@ -82,17 +99,19 @@
 - [ ] Security headers
 - [ ] Audit logging
 
-## 9. Logging & Debugging [PARTIALLY DONE]
+## 10. Logging & Debugging [PARTIALLY DONE]
 
 - [x] Basic structured logging
 - [x] Debug protocol traces
+- [x] Detailed error logging
+- [x] Log context propagation
 - [ ] Log rotation
 - [ ] Request ID tracking
 - [ ] Performance profiling
 - [ ] Diagnostic endpoints
 - [ ] Audit trail
 
-## 10. Documentation
+## 11. Documentation
 
 - [ ] API documentation
 - [ ] Configuration guide
@@ -102,7 +121,7 @@
 - [ ] Architecture documentation
 - [ ] Contributing guidelines
 
-## 11. Administrative Features
+## 12. Administrative Features
 
 - [ ] Admin API
 - [ ] Statistics endpoint
@@ -111,7 +130,7 @@
 - [ ] Log level control
 - [ ] Feature flag management
 
-## 12. Development Tools
+## 13. Development Tools
 
 - [ ] Development environment setup
 - [ ] CI/CD pipeline
@@ -120,25 +139,28 @@
 - [ ] Kubernetes manifests
 - [ ] Development workflow documentation
 
-## 13. Protocol Enhancements
+## 14. Protocol Enhancements
 
+- [x] Support for basic Modbus function codes
+- [x] Proper error reporting
+- [x] Protocol separation of concerns
 - [ ] Support for all Modbus function codes
 - [ ] Protocol conformance testing
 - [ ] Custom function code handling
 - [ ] Protocol extensions
-- [ ] Better error reporting to clients
 - [ ] Protocol version negotiation
 
-## 14. Operational Features [PARTIALLY DONE]
+## 15. Operational Features [PARTIALLY DONE]
 
 - [x] Basic graceful shutdown
+- [x] Error recovery mechanisms
 - [ ] Enhanced hot reload
 - [ ] Backup/Restore functionality
 - [ ] Data persistence (if needed)
 - [ ] Migration tools
 - [ ] Maintenance mode
 
-## 15. Integration
+## 16. Integration
 
 - [ ] OpenTelemetry integration
 - [ ] Metrics export
@@ -150,8 +172,8 @@
 ## Next Priority Tasks
 
 1. Complete Connection Management:
-   - Implement connection pooling
-   - Add advanced health checks
+   - Implement proper TCP connection handling tests
+   - Add proper ModbusProcessor tests
    - Add connection reuse
    - Improve timeout handling
 
@@ -161,7 +183,7 @@
    - Add system resource monitoring
 
 3. Add More Tests:
-   - Integration tests
+   - Integration tests focusing on TCP handling
    - Protocol conformance tests
    - Load tests
 
@@ -173,7 +195,7 @@
 Each feature should be implemented with:
 
 - Clear documentation
-- Tests
+- Tests (with proper responsibility separation)
 - Metrics
 - Configuration options
 - Error handling
