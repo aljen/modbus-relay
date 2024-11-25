@@ -139,8 +139,7 @@ impl ConnectionManager {
         let global_permit = self
             .global_semaphore
             .clone()
-            .acquire_owned()
-            .await
+            .try_acquire_owned()
             .map_err(|_| {
                 RelayError::Connection(ConnectionError::limit_exceeded(
                     "Global connection limit reached",
@@ -402,7 +401,9 @@ mod tests {
         let config = ConnectionConfig {
             max_connections: 2,
             per_ip_limits: Some(1),
-            ..Default::default()
+            idle_timeout: Duration::from_secs(60),
+            connect_timeout: Duration::from_secs(5),
+            backoff: BackoffConfig::default(),
         };
 
         let manager = Arc::new(ConnectionManager::new(config));
@@ -411,22 +412,76 @@ mod tests {
 
         // First connection should succeed
         let conn1 = manager.accept_connection(addr1).await;
-        assert!(conn1.is_ok());
+        assert!(conn1.is_ok(), "First connection should succeed");
 
-        // Second connection from the same IP should fail
+        // Second connection from same IP should fail immediately (per-IP limit)
         let conn2 = manager.accept_connection(addr1).await;
-        assert!(
-            conn2.is_err(),
-            "Expected connection limit error for same IP"
-        );
+        match conn2 {
+            Err(RelayError::Connection(ConnectionError::LimitExceeded(msg))) => {
+                assert!(
+                    msg.contains("Per-IP limit (1) reached"),
+                    "Wrong error message: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected LimitExceeded error, got: {:?}", other),
+        }
 
         // Connection from different IP should succeed
         let conn3 = manager.accept_connection(addr2).await;
-        assert!(conn3.is_ok());
+        assert!(conn3.is_ok(), "Connection from different IP should succeed");
 
-        // Third connection should fail (global limit)
+        // Third connection should fail immediately (global limit)
         let conn4 = manager.accept_connection(addr2).await;
-        assert!(conn4.is_err(), "Expected global connection limit error");
+        match conn4 {
+            Err(RelayError::Connection(ConnectionError::LimitExceeded(msg))) => {
+                assert!(
+                    msg.contains("Global connection limit"),
+                    "Wrong error message: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected LimitExceeded error, got: {:?}", other),
+        }
+
+        // Drop first connection and try again - should succeed
+        drop(conn1);
+        tokio::time::sleep(Duration::from_millis(10)).await; // Give time for cleanup
+
+        let conn5 = manager.accept_connection(addr1).await;
+        assert!(conn5.is_ok(), "Connection after drop should succeed");
+    }
+
+    #[tokio::test]
+    async fn test_connection_stats_after_limit() {
+        let config = ConnectionConfig {
+            max_connections: 1,
+            per_ip_limits: Some(1),
+            ..Default::default()
+        };
+
+        let manager = Arc::new(ConnectionManager::new(config));
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 1234);
+
+        // First connection succeeds
+        let conn = manager.accept_connection(addr).await.unwrap();
+
+        // Second connection fails
+        let _err = manager.accept_connection(addr).await.unwrap_err();
+
+        // Check stats
+        let stats = manager.get_stats().await;
+        assert_eq!(
+            stats.active_connections, 1,
+            "Should have one active connection"
+        );
+        assert_eq!(
+            stats.total_connections, 1,
+            "Should have one total connection"
+        );
+
+        // Cleanup
+        drop(conn);
     }
 
     #[tokio::test]
