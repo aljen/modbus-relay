@@ -1,34 +1,21 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-#[cfg(feature = "rts")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::os::unix::io::AsRawFd;
 
 #[cfg(feature = "rts")]
 use libc::{TIOCMGET, TIOCMSET, TIOCM_RTS};
-#[cfg(feature = "rts")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use serialport::TTYPort;
 
 use serialport::SerialPort;
-use thiserror::Error;
-use tokio::{sync::Mutex, time::error::Elapsed};
-use tracing::{error, info, trace};
+use tokio::sync::Mutex;
+use tracing::{info, trace};
 
-use crate::RelayConfig;
+use crate::{RelayConfig, TransportError};
 
 #[cfg(feature = "rts")]
 use crate::RtsType;
-
-#[derive(Error, Debug)]
-pub enum TransportError {
-    #[error("Serial port error: {0}")]
-    Serial(#[from] serialport::Error),
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("Transaction timeout")]
-    Timeout(#[from] Elapsed),
-    #[error("No response received")]
-    NoResponse,
-}
 
 pub struct RtuTransport {
     port: Mutex<Box<dyn SerialPort>>,
@@ -39,10 +26,10 @@ pub struct RtuTransport {
     rts_delay_us: u64,
     #[cfg(feature = "rts")]
     rts_type: RtsType,
-    #[cfg(feature = "rts")]
-    rtu_rts_flush_after_write: bool,
-    #[cfg(feature = "rts")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     raw_fd: i32,
+
+    rtu_flush_after_write: bool,
 }
 
 impl RtuTransport {
@@ -50,7 +37,7 @@ impl RtuTransport {
         info!("Opening serial port {}", config.serial_port_info());
 
         // Explicite otwieramy jako TTYPort na Unixie
-        #[cfg(feature = "rts")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let tty_port: TTYPort = serialport::new(&config.rtu_device, config.rtu_baud_rate)
             .data_bits(config.data_bits.into())
             .parity(config.parity.into())
@@ -59,13 +46,13 @@ impl RtuTransport {
             .flow_control(serialport::FlowControl::None)
             .open_native()?;
 
-        #[cfg(feature = "rts")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let raw_fd = tty_port.as_raw_fd();
 
-        #[cfg(feature = "rts")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let port: Box<dyn SerialPort> = Box::new(tty_port);
 
-        #[cfg(not(feature = "rts"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let port = serialport::new(&config.rtu_device, config.rtu_baud_rate)
             .data_bits(config.data_bits.into())
             .parity(config.parity.into())
@@ -82,10 +69,10 @@ impl RtuTransport {
             rts_delay_us: config.rtu_rts_delay_us,
             #[cfg(feature = "rts")]
             rts_type: config.rtu_rts_type,
-            #[cfg(feature = "rts")]
-            rtu_rts_flush_after_write: config.rtu_rts_flush_after_write,
-            #[cfg(feature = "rts")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             raw_fd,
+
+            rtu_flush_after_write: config.rtu_flush_after_write,
         })
     }
 
@@ -98,7 +85,11 @@ impl RtuTransport {
 
             // Get current flags
             if libc::ioctl(self.raw_fd, TIOCMGET, &mut flags) < 0 {
-                return Err(TransportError::Io(std::io::Error::last_os_error()));
+                return Err(TransportError::Io {
+                    operation: IoOperation::Control,
+                    details: "Failed to get RTS flags".to_string(),
+                    source: std::io::Error::last_os_error(),
+                });
             }
 
             // Modify RTS flag
@@ -110,7 +101,11 @@ impl RtuTransport {
 
             // Set new flags
             if libc::ioctl(self.raw_fd, TIOCMSET, &flags) < 0 {
-                return Err(TransportError::Io(std::io::Error::last_os_error()));
+                return Err(TransportError::Io {
+                    operation: IoOperation::Control,
+                    details: "Failed to set RTS flags".to_string(),
+                    source: std::io::Error::last_os_error(),
+                });
             }
 
             info!("RTS set to {}", if on { "HIGH" } else { "LOW" });
@@ -119,12 +114,17 @@ impl RtuTransport {
         Ok(())
     }
 
-    #[cfg(feature = "rts")]
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn tc_flush(&self) -> Result<(), TransportError> {
+        use crate::IoOperation;
+
         unsafe {
             if libc::tcflush(self.raw_fd, libc::TCIOFLUSH) != 0 {
-                return Err(TransportError::Io(std::io::Error::last_os_error()));
+                return Err(TransportError::Io {
+                    operation: IoOperation::Flush,
+                    details: "Failed to flush the serial port".to_string(),
+                    source: std::io::Error::last_os_error(),
+                });
             }
         }
         Ok(())
@@ -170,8 +170,9 @@ impl RtuTransport {
         };
 
         let expected_size = Self::guess_response_size(function, quantity);
-
         info!("Expected response size: {} bytes", expected_size);
+
+        let transaction_start = Instant::now();
 
         tokio::time::timeout(self.transaction_timeout, async {
             let mut port = self.port.lock().await;
@@ -190,23 +191,24 @@ impl RtuTransport {
 
             // Write request
             info!("Writing request");
-            port.write_all(request)?;
-            port.flush()?;
+            port.write_all(request).map_err(TransportError::from)?;
+            port.flush().map_err(TransportError::from)?;
 
             #[cfg(feature = "rts")]
             {
                 info!("RTS -> RX mode");
                 self.set_rts(self.rts_type.to_signal_level(false))?;
+            }
 
-                if self.rtu_rts_flush_after_write {
-                    info!("RTS -> TX mode [flushing]");
-                    self.tc_flush()?;
-                }
+            if self.rtu_flush_after_write {
+                info!("RTS -> TX mode [flushing]");
+                self.tc_flush()?;
+            }
 
-                if self.rts_delay_us > 0 {
-                    info!("RTS -> RX mode [waiting]");
-                    tokio::time::sleep(Duration::from_micros(self.rts_delay_us)).await;
-                }
+            #[cfg(feature = "rts")]
+            if self.rts_delay_us > 0 {
+                info!("RTS -> RX mode [waiting]");
+                tokio::time::sleep(Duration::from_micros(self.rts_delay_us)).await;
             }
 
             // Read response
@@ -256,20 +258,26 @@ impl RtuTransport {
                         consecutive_timeouts += 1;
                         if consecutive_timeouts >= MAX_TIMEOUTS {
                             if total_bytes == 0 {
-                                return Err(TransportError::NoResponse);
+                                return Err(TransportError::NoResponse {
+                                    attempts: consecutive_timeouts,
+                                    elapsed: transaction_start.elapsed(),
+                                });
                             }
                             trace!("Max timeouts reached with {} bytes", total_bytes);
                             break;
                         }
                         tokio::task::yield_now().await;
                     }
-                    Err(e) => return Err(e.into()),
+                    Err(e) => return Err(TransportError::from(e)),
                 }
             }
 
             if total_bytes == 0 {
                 info!("No response received");
-                return Err(TransportError::NoResponse);
+                return Err(TransportError::NoResponse {
+                    attempts: consecutive_timeouts,
+                    elapsed: transaction_start.elapsed(),
+                });
             }
 
             if self.trace_frames && total_bytes > 0 {
@@ -282,6 +290,11 @@ impl RtuTransport {
 
             Ok(total_bytes)
         })
-        .await?
+        .await
+        .map_err(|elapsed| TransportError::Timeout {
+            elapsed: transaction_start.elapsed(),
+            limit: self.transaction_timeout,
+            source: elapsed,
+        })?
     }
 }

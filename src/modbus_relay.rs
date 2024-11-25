@@ -1,29 +1,12 @@
 use std::sync::Arc;
 
-use rmodbus::ErrorKind as ModbusError;
-use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
 use tracing::{error, info, warn};
 
-use crate::{
-    relay_config::RelayConfig,
-    rtu_transport::{RtuTransport, TransportError},
-};
-
-#[derive(Error, Debug)]
-pub enum RelayError {
-    #[error("Transport error: {0}")]
-    Transport(#[from] TransportError),
-    #[error("Network error: {0}")]
-    Network(#[from] std::io::Error),
-    #[error("Modbus protocol error: {0}")]
-    Protocol(#[from] ModbusError),
-    #[error("Configuration error: {0}")]
-    Config(String),
-}
+use crate::{relay_config::RelayConfig, rtu_transport::RtuTransport, RelayError};
 
 pub struct ModbusRelay {
     transport: Arc<RtuTransport>,

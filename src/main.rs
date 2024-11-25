@@ -53,7 +53,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let config: RelayConfig = serde_json::from_str(&content)?;
         config
             .validate()
-            .map_err(modbus_relay::RelayError::Config)?;
+            .map_err(|err| modbus_relay::RelayError::Config {
+                kind: err.kind,
+                details: err.details,
+            })?;
         config
     } else {
         info!("Config file not found, using defaults");

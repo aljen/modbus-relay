@@ -3,6 +3,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+use crate::{errors::ValidationError, ConfigErrorKind};
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Parity {
@@ -145,8 +147,8 @@ pub struct RelayConfig {
     pub rtu_rts_type: RtsType,
     #[cfg(feature = "rts")]
     pub rtu_rts_delay_us: u64,
-    #[cfg(feature = "rts")]
-    pub rtu_rts_flush_after_write: bool,
+
+    pub rtu_flush_after_write: bool,
 
     /// Timeout for the entire transaction (request + response)
     #[serde(with = "duration_millis")]
@@ -179,8 +181,8 @@ impl Default for RelayConfig {
             rtu_rts_type: RtsType::Up,
             #[cfg(feature = "rts")]
             rtu_rts_delay_us: 3500,
-            #[cfg(feature = "rts")]
-            rtu_rts_flush_after_write: true,
+
+            rtu_flush_after_write: true,
 
             transaction_timeout: Duration::from_secs(1),
             serial_timeout: Duration::from_millis(500),
@@ -192,41 +194,75 @@ impl Default for RelayConfig {
 }
 
 impl RelayConfig {
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), ValidationError> {
         // TCP validation
-        if self.tcp_bind_port == 0 {
-            return Err("TCP port cannot be 0".into());
+        if !self.tcp_bind_addr.parse::<std::net::IpAddr>().is_ok() {
+            return Err(ValidationError {
+                kind: ConfigErrorKind::InvalidTcpAddress,
+                details: format!("Invalid TCP bind address: {}", self.tcp_bind_addr),
+            });
+        }
+
+        if !(1..=65535).contains(&self.tcp_bind_port) {
+            return Err(ValidationError {
+                kind: ConfigErrorKind::InvalidTcpPort,
+                details: format!("Invalid TCP port: {}", self.tcp_bind_port),
+            });
         }
 
         // Serial port validation
-        if self.rtu_baud_rate == 0 {
-            return Err("RTU baud rate cannot be 0".into());
+        if self.rtu_baud_rate == 0 || self.rtu_baud_rate > 921600 {
+            return Err(ValidationError {
+                kind: ConfigErrorKind::InvalidBaudRate,
+                details: format!("Invalid baud rate: {}", self.rtu_baud_rate),
+            });
         }
 
         // Timeout validation
         if self.transaction_timeout.as_millis() == 0 {
-            return Err("Transaction timeout cannot be 0".into());
+            return Err(ValidationError {
+                kind: ConfigErrorKind::InvalidTimeout,
+                details: "Transaction timeout cannot be 0".to_string(),
+            });
         }
 
         if self.serial_timeout.as_millis() == 0 {
-            return Err("Serial timeout cannot be 0".into());
+            return Err(ValidationError {
+                kind: ConfigErrorKind::InvalidTimeout,
+                details: "Serial timeout cannot be 0".to_string(),
+            });
         }
 
         // RTS validation
         #[cfg(feature = "rts")]
         if self.rtu_rts_type != RtsType::None {
             if self.rtu_rts_delay_us > 10000 {
-                return Err("RTS delay too large (max 10000ms)".into());
+                return Err(ValidationError {
+                    kind: ConfigErrorKind::InvalidRtsSettings,
+                    details: format!("RTS delay too large: {}µs", self.rtu_rts_delay_us),
+                });
             }
         }
 
         // Buffer validation
         if self.max_frame_size < 8 {
-            return Err("Frame size too small (min 8 bytes)".into());
+            return Err(ValidationError {
+                kind: ConfigErrorKind::InvalidFrameSize,
+                details: format!(
+                    "Frame size too small: {} bytes (min 8)",
+                    self.max_frame_size
+                ),
+            });
         }
 
         if self.max_frame_size > 256 {
-            return Err("Frame size too large (max 256 bytes)".into());
+            return Err(ValidationError {
+                kind: ConfigErrorKind::InvalidFrameSize,
+                details: format!(
+                    "Frame size too large: {} bytes (max 256)",
+                    self.max_frame_size
+                ),
+            });
         }
 
         Ok(())
