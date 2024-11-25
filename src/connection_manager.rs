@@ -52,6 +52,17 @@ impl Default for ConnectionConfig {
     }
 }
 
+impl Default for BackoffConfig {
+    fn default() -> Self {
+        Self {
+            initial_interval: Duration::from_millis(100),
+            max_interval: Duration::from_secs(30),
+            multiplier: 2.0,
+            max_retries: 5,
+        }
+    }
+}
+
 /// Stats for a single client
 #[derive(Debug)]
 struct ClientStats {
@@ -68,6 +79,7 @@ struct ClientStats {
 }
 
 /// TCP connection management
+#[derive(Debug)]
 pub struct ConnectionManager {
     /// Connection limit per IP
     per_ip_semaphores: Arc<Mutex<HashMap<SocketAddr, Arc<Semaphore>>>>,
@@ -310,6 +322,7 @@ impl ConnectionManager {
 }
 
 /// RAII guard for the connection
+#[derive(Debug)]
 pub struct ConnectionGuard {
     manager: Arc<ConnectionManager>,
     addr: SocketAddr,
@@ -391,8 +404,6 @@ impl BackoffStrategy {
 mod tests {
     use tokio::time::sleep;
 
-    use crate::ProtocolErrorKind;
-
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
 
@@ -470,7 +481,7 @@ mod tests {
         let _err = manager.accept_connection(addr).await.unwrap_err();
 
         // Check stats
-        let stats = manager.get_stats().await;
+        let stats = manager.get_stats().await.unwrap(); // Unwrap Result
         assert_eq!(
             stats.active_connections, 1,
             "Should have one active connection"
@@ -490,7 +501,6 @@ mod tests {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 1234);
 
         // Record some errors
-        let error = RelayError::protocol(ProtocolErrorKind::InvalidFunction, "Test error");
         assert!(manager.record_client_error(&addr).await.is_ok());
 
         // Verify error was recorded

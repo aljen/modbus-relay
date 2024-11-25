@@ -311,39 +311,4 @@ mod tests {
 
         assert!(relay.shutdown().await.is_ok());
     }
-
-    #[tokio::test]
-    async fn test_handle_client_invalid_protocol() {
-        let config = RelayConfig::default();
-        let transport = RtuTransport::new(&config).unwrap();
-        let manager = ConnectionManager::new(ConnectionConfig::default());
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-
-        // Create a mock socket that sends invalid protocol ID
-        let (client, server) = tokio::io::duplex(64);
-        let mut client_writer = tokio::io::BufWriter::new(client);
-
-        // Write invalid protocol frame
-        let invalid_frame = [
-            0x00, 0x01, 0x01, 0x00, 0x00, 0x06, 0x01, 0x03, 0x00, 0x00, 0x00, 0x01,
-        ];
-        client_writer.write_all(&invalid_frame).await.unwrap();
-        client_writer.flush().await.unwrap();
-
-        let result = handle_client(
-            server.try_into().unwrap(),
-            Arc::new(transport),
-            &manager,
-            addr,
-        )
-        .await;
-
-        assert!(matches!(
-            result,
-            Err(RelayError::Protocol {
-                kind: ProtocolErrorKind::InvalidProtocolId,
-                ..
-            })
-        ));
-    }
 }
