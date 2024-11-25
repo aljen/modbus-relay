@@ -102,6 +102,9 @@ pub enum ConnectionError {
     #[error("Connection rejected: {0}")]
     Rejected(String),
 
+    #[error("Connection disconnected")]
+    Disconnected,
+
     #[error("Backoff error: {0}")]
     Backoff(#[from] BackoffError),
 }
@@ -232,6 +235,7 @@ pub enum ClientErrorKind {
     InvalidRequest,
     TooManyRequests,
     TooManyConnections,
+    WriteError,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -339,6 +343,7 @@ impl std::fmt::Display for ClientErrorKind {
             Self::InvalidRequest => write!(f, "Invalid request"),
             Self::TooManyRequests => write!(f, "Too many requests"),
             Self::TooManyConnections => write!(f, "Too many connections"),
+            Self::WriteError => write!(f, "Write error"),
         }
     }
 }

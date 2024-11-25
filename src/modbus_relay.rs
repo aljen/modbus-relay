@@ -1,7 +1,7 @@
 use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
     net::{TcpListener, TcpStream},
     sync::{broadcast, Mutex},
     task::JoinHandle,
@@ -268,6 +268,119 @@ impl ModbusRelay {
     }
 }
 
+async fn read_frame(
+    reader: &mut tokio::net::tcp::ReadHalf<'_>,
+    peer_addr: SocketAddr,
+    manager: &ConnectionManager,
+) -> Result<(Vec<u8>, [u8; 2]), RelayError> {
+    let mut tcp_buf = vec![0u8; 256];
+
+    // Read TCP request with timeout
+    let n = match timeout(Duration::from_secs(60), reader.read(&mut tcp_buf)).await {
+        Ok(Ok(0)) => {
+            return Err(RelayError::Connection(ConnectionError::Disconnected));
+        }
+        Ok(Ok(n)) => {
+            if n < 7 {
+                manager.record_request(peer_addr, false).await;
+                return Err(RelayError::frame(
+                    FrameErrorKind::TooShort,
+                    format!("Frame too short: {} bytes", n),
+                    Some(tcp_buf[..n].to_vec()),
+                ));
+            }
+            n
+        }
+        Ok(Err(e)) => {
+            manager.record_request(peer_addr, false).await;
+            return Err(RelayError::Connection(ConnectionError::InvalidState(
+                format!("Connection lost: {}", e),
+            )));
+        }
+        Err(_) => {
+            manager.record_request(peer_addr, false).await;
+            return Err(RelayError::Connection(ConnectionError::Timeout(
+                "Read operation timed out".to_string(),
+            )));
+        }
+    };
+
+    debug!(
+        "Received TCP frame from {}: {:02X?}",
+        peer_addr,
+        &tcp_buf[..n]
+    );
+
+    // Validate MBAP header
+    let transaction_id = [tcp_buf[0], tcp_buf[1]];
+    let protocol_id = u16::from_be_bytes([tcp_buf[2], tcp_buf[3]]);
+    if protocol_id != 0 {
+        manager.record_request(peer_addr, false).await;
+        return Err(RelayError::protocol(
+            ProtocolErrorKind::InvalidProtocolId,
+            format!("Invalid protocol ID: {}", protocol_id),
+        ));
+    }
+
+    let length = u16::from_be_bytes([tcp_buf[4], tcp_buf[5]]) as usize;
+    if length > 249 {
+        manager.record_request(peer_addr, false).await;
+        return Err(RelayError::frame(
+            FrameErrorKind::TooLong,
+            format!("Frame too long: {} bytes", length),
+            None,
+        ));
+    }
+
+    if length + 6 != n {
+        manager.record_request(peer_addr, false).await;
+        return Err(RelayError::frame(
+            FrameErrorKind::InvalidFormat,
+            format!("Invalid frame length, expected {}, got {}", length + 6, n),
+            Some(tcp_buf[..n].to_vec()),
+        ));
+    }
+
+    Ok((tcp_buf[..n].to_vec(), transaction_id))
+}
+
+async fn process_frame(
+    modbus: &ModbusProcessor,
+    frame: &[u8],
+    transaction_id: [u8; 2],
+) -> Result<Vec<u8>, RelayError> {
+    modbus
+        .process_request(
+            transaction_id,
+            frame[6],     // Unit ID
+            &frame[7..], // PDU
+        )
+        .await
+}
+
+async fn send_response(
+    writer: &mut tokio::net::tcp::WriteHalf<'_>,
+    response: &[u8],
+    peer_addr: SocketAddr,
+) -> Result<(), RelayError> {
+    debug!("Sending TCP response to {}: {:02X?}", peer_addr, response);
+
+    // Send TCP response with timeout
+    match timeout(Duration::from_secs(5), writer.write_all(response)).await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(e)) => Err(RelayError::client(
+            ClientErrorKind::WriteError,
+            peer_addr,
+            format!("Write error: {}", e),
+        )),
+        Err(_) => Err(RelayError::client(
+            ClientErrorKind::Timeout,
+            peer_addr,
+            "Write timeout".to_string(),
+        )),
+    }
+}
+
 async fn handle_client(
     mut socket: TcpStream,
     transport: Arc<RtuTransport>,
@@ -306,84 +419,18 @@ async fn handle_client(
     let modbus = ModbusProcessor::new(transport);
 
     loop {
-        let mut tcp_buf = vec![0u8; 256];
-
-        // Read TCP request with timeout
-        let n = match timeout(Duration::from_secs(60), reader.read(&mut tcp_buf)).await {
-            Ok(Ok(0)) => {
+        // 1. Read frame
+        let (frame, transaction_id) = match read_frame(&mut reader, peer_addr, manager).await {
+            Ok((frame, id)) => (frame, id),
+            Err(RelayError::Connection(ConnectionError::Disconnected)) => {
                 info!("Client {} disconnected", peer_addr);
                 break;
             }
-            Ok(Ok(n)) => {
-                if n < 7 {
-                    manager.record_request(peer_addr, false).await;
-                    return Err(RelayError::frame(
-                        FrameErrorKind::TooShort,
-                        format!("Frame too short: {} bytes", n),
-                        Some(tcp_buf[..n].to_vec()),
-                    ));
-                }
-                n
-            }
-            Ok(Err(e)) => {
-                manager.record_request(peer_addr, false).await;
-                return Err(RelayError::Connection(ConnectionError::InvalidState(
-                    format!("Connection lost: {}", e),
-                )));
-            }
-            Err(_) => {
-                manager.record_request(peer_addr, false).await;
-                return Err(RelayError::Connection(ConnectionError::Timeout(
-                    "Read operation timed out".to_string(),
-                )));
-            }
+            Err(e) => return Err(e),
         };
 
-        debug!(
-            "Received TCP frame from {}: {:02X?}",
-            peer_addr,
-            &tcp_buf[..n]
-        );
-
-        // Validate MBAP header
-        let transaction_id = [tcp_buf[0], tcp_buf[1]];
-        let protocol_id = u16::from_be_bytes([tcp_buf[2], tcp_buf[3]]);
-        if protocol_id != 0 {
-            manager.record_request(peer_addr, false).await;
-            return Err(RelayError::protocol(
-                ProtocolErrorKind::InvalidProtocolId,
-                format!("Invalid protocol ID: {}", protocol_id),
-            ));
-        }
-
-        let length = u16::from_be_bytes([tcp_buf[4], tcp_buf[5]]) as usize;
-        if length > 249 {
-            manager.record_request(peer_addr, false).await;
-            return Err(RelayError::frame(
-                FrameErrorKind::TooLong,
-                format!("Frame too long: {} bytes", length),
-                None,
-            ));
-        }
-
-        if length + 6 != n {
-            manager.record_request(peer_addr, false).await;
-            return Err(RelayError::frame(
-                FrameErrorKind::InvalidFormat,
-                format!("Invalid frame length, expected {}, got {}", length + 6, n),
-                Some(tcp_buf[..n].to_vec()),
-            ));
-        }
-
-        // Process Modbus request
-        let response = match modbus
-            .process_request(
-                transaction_id,
-                tcp_buf[6],     // Unit ID
-                &tcp_buf[7..n], // PDU
-            )
-            .await
-        {
+        // 2. Process frame
+        let response = match process_frame(&modbus, &frame, transaction_id).await {
             Ok(response) => response,
             Err(e) => {
                 manager.record_request(peer_addr, false).await;
@@ -391,16 +438,10 @@ async fn handle_client(
             }
         };
 
-        debug!("Sending TCP response to {}: {:02X?}", peer_addr, &response);
-
-        // Send TCP response with timeout
-        if (timeout(Duration::from_secs(5), writer.write_all(&response)).await).is_err() {
+        // 3. Send response
+        if let Err(e) = send_response(&mut writer, &response, peer_addr).await {
             manager.record_request(peer_addr, false).await;
-            return Err(RelayError::client(
-                ClientErrorKind::Timeout,
-                peer_addr,
-                "Write timeout".to_string(),
-            ));
+            return Err(e);
         }
 
         manager.record_request(peer_addr, true).await;
