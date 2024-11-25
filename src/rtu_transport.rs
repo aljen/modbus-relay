@@ -14,7 +14,9 @@ use tracing::{info, trace};
 
 #[cfg(feature = "rts")]
 use crate::RtsError;
-use crate::{FrameErrorKind, IoOperation, RelayConfig, RelayError, TransportError};
+use crate::{
+    guess_response_size, FrameErrorKind, IoOperation, RelayConfig, RelayError, TransportError,
+};
 
 pub struct RtuTransport {
     port: Mutex<Box<dyn SerialPort>>,
@@ -114,29 +116,6 @@ impl RtuTransport {
         Ok(())
     }
 
-    fn guess_response_size(function: u8, quantity: u16) -> usize {
-        match function {
-            0x01 | 0x02 => {
-                // Read Coils/Discrete Inputs
-                let data_bytes = (quantity as usize + 7) / 8; // Zaokrąglenie w górę
-                1 + 1 + 1 + data_bytes + 2 // Unit + Func + ByteCount + Data + CRC
-            }
-            0x03 | 0x04 => {
-                // Read Holding/Input Registers
-                1 + 1 + 1 + (quantity as usize * 2) + 2 // Unit + Func + ByteCount + Data + CRC
-            }
-            0x05 | 0x06 => {
-                // Write Single Coil/Register
-                8 // Unit + Func + Addr(2) + Value(2) + CRC(2)
-            }
-            0x0F | 0x10 => {
-                // Write Multiple Coils/Registers
-                8 // Unit + Func + Addr(2) + Quantity(2) + CRC(2)
-            }
-            _ => 256, // Bezpieczna wartość dla nieznanych funkcji
-        }
-    }
-
     pub async fn transaction(
         &self,
         request: &[u8],
@@ -183,7 +162,7 @@ impl RtuTransport {
             1
         };
 
-        let expected_size = Self::guess_response_size(*function, quantity);
+        let expected_size = guess_response_size(*function, quantity);
         info!("Expected response size: {} bytes", expected_size);
 
         let transaction_start = Instant::now();

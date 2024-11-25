@@ -302,7 +302,6 @@ async fn handle_client(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{IpAddr, Ipv4Addr};
 
     #[tokio::test]
     async fn test_modbus_relay_shutdown() {

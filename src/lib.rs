@@ -9,7 +9,7 @@ pub use errors::{
     BackoffError, ClientErrorKind, ConfigValidationError, ConnectionError, FrameErrorKind,
     IoOperation, ProtocolErrorKind, RelayError, RtsError, SerialErrorKind, TransportError,
 };
-pub use modbus::ModbusProcessor;
+pub use modbus::{guess_response_size, ModbusProcessor};
 pub use modbus_relay::ModbusRelay;
 pub use relay_config::{DataBits, Parity, RelayConfig, RtsType, StopBits};
 pub use rtu_transport::RtuTransport;

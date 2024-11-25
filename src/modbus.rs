@@ -20,6 +20,49 @@ fn calc_crc16(frame: &[u8], data_length: u8) -> u16 {
     crc
 }
 
+/// Estimates the expected size of a Modbus RTU response frame based on the function code and quantity.
+///
+/// # Arguments
+///
+/// * `function` - The Modbus function code.
+/// * `quantity` - The number of coils or registers involved.
+///
+/// # Returns
+///
+/// The estimated size of the response frame in bytes.
+pub fn guess_response_size(function: u8, quantity: u16) -> usize {
+    match function {
+        0x01 | 0x02 => {
+            // Read Coils / Read Discrete Inputs
+            // Each coil status is one bit; calculate the number of data bytes required
+            let data_bytes = ((quantity as usize) + 7) / 8; // Round up to the nearest whole byte
+                                                            // Response size: Address(1) + Function(1) + Byte Count(1) + Data + CRC(2)
+            1 + 1 + 1 + data_bytes + 2
+        }
+        0x03 | 0x04 => {
+            // Read Holding Registers / Read Input Registers
+            // Each register is two bytes
+            let data_bytes = (quantity as usize) * 2;
+            // Response size: Address(1) + Function(1) + Byte Count(1) + Data + CRC(2)
+            1 + 1 + 1 + data_bytes + 2
+        }
+        0x05 | 0x06 => {
+            // Write Single Coil / Write Single Register
+            // Response size: Address(1) + Function(1) + Address(2) + Value(2) + CRC(2)
+            1 + 1 + 2 + 2 + 2
+        }
+        0x0F | 0x10 => {
+            // Write Multiple Coils / Write Multiple Registers
+            // Response size: Address(1) + Function(1) + Address(2) + Quantity(2) + CRC(2)
+            1 + 1 + 2 + 2 + 2
+        }
+        _ => {
+            // Default maximum size for unknown function codes
+            256
+        }
+    }
+}
+
 pub struct ModbusProcessor {
     transport: Arc<RtuTransport>,
 }
