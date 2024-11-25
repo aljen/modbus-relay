@@ -190,6 +190,7 @@ pub enum FrameErrorKind {
     TooShort,
     TooLong,
     InvalidFormat,
+    InvalidUnitId,
     InvalidHeader,
     InvalidCrc,
     UnexpectedResponse,
@@ -251,6 +252,7 @@ impl std::fmt::Display for FrameErrorKind {
             Self::TooShort => write!(f, "Frame too short"),
             Self::TooLong => write!(f, "Frame too long"),
             Self::InvalidFormat => write!(f, "Invalid frame format"),
+            Self::InvalidUnitId => write!(f, "Invalid unit ID"),
             Self::InvalidHeader => write!(f, "Invalid frame header"),
             Self::InvalidCrc => write!(f, "Invalid frame CRC"),
             Self::UnexpectedResponse => write!(f, "Unexpected response"),
@@ -396,6 +398,7 @@ impl RelayError {
                 })
             }
             FrameErrorKind::InvalidFormat
+            | FrameErrorKind::InvalidUnitId
             | FrameErrorKind::InvalidHeader
             | FrameErrorKind::UnexpectedResponse => RelayError::Frame(FrameError::Format {
                 kind: match kind {

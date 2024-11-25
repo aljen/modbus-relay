@@ -117,73 +117,124 @@ impl ModbusProcessor {
         Self { transport }
     }
 
+    /// Processes a Modbus TCP request by converting it to Modbus RTU, sending it over the transport,
+    /// and then converting the RTU response back to Modbus TCP format.
+    ///
+    /// # Arguments
+    ///
+    /// * `transaction_id` - The Modbus TCP transaction ID.
+    /// * `unit_id` - The Modbus unit ID (slave address).
+    /// * `pdu` - The Protocol Data Unit from the Modbus TCP request.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the Modbus TCP response as a vector of bytes, or a `RelayError`.
     pub async fn process_request(
         &self,
         transaction_id: [u8; 2],
         unit_id: u8,
         pdu: &[u8],
     ) -> Result<Vec<u8>, RelayError> {
-        // Convert TCP to RTU
-        let mut rtu_request = Vec::with_capacity(256);
+        // Build RTU request frame: [Unit ID][PDU][CRC16]
+        let mut rtu_request = Vec::with_capacity(1 + pdu.len() + 2); // Unit ID + PDU + CRC16
         rtu_request.push(unit_id);
         rtu_request.extend_from_slice(pdu);
 
+        // Calculate CRC16 checksum and append to the request
         let crc = calc_crc16(&rtu_request);
-        rtu_request.extend_from_slice(&crc.to_le_bytes());
+        rtu_request.extend_from_slice(&crc.to_le_bytes()); // Append CRC16 in little-endian
 
         debug!(
-            "Sending RTU request to device: data={:02X?}, crc={:04X}",
-            &rtu_request[..rtu_request.len() - 2],
+            "Sending RTU request: unit_id=0x{:02X}, function=0x{:02X}, data={:02X?}, crc=0x{:04X}",
+            unit_id,
+            pdu.first().copied().unwrap_or(0),
+            &pdu[1..],
             crc
         );
 
+        // Estimate the expected RTU response size
+        let function_code = pdu.first().copied().unwrap_or(0);
+        let quantity = if pdu.len() >= 4 {
+            u16::from_be_bytes([pdu[2], pdu[3]])
+        } else {
+            0
+        };
+        let expected_response_size = guess_response_size(function_code, quantity);
+
+        // Allocate buffer for RTU response
+        let mut rtu_response = vec![0u8; expected_response_size];
+
         // Execute RTU transaction
-        let mut rtu_buf = vec![0u8; 256];
-        let rtu_len = match self.transport.transaction(&rtu_request, &mut rtu_buf).await {
+        let rtu_len = match self
+            .transport
+            .transaction(&rtu_request, &mut rtu_response)
+            .await
+        {
             Ok(len) => {
-                if len < 3 {
+                if len < 5 {
+                    // Minimum RTU response size: Unit ID(1) + Function(1) + Data(1) + CRC(2)
                     return Err(RelayError::frame(
                         FrameErrorKind::TooShort,
                         format!("RTU response too short: {} bytes", len),
-                        Some(rtu_buf[..len].to_vec()),
+                        Some(rtu_response[..len].to_vec()),
                     ));
                 }
                 len
             }
-            Err(_) => {
-                // Prepare Modbus exception response
-                let mut exception_response = Vec::new();
+            Err(e) => {
+                debug!("Transport transaction error: {:?}", e);
+
+                // Prepare Modbus exception response with exception code 0x0B (Gateway Path Unavailable)
+                let exception_code = 0x0B;
+                let mut exception_response = Vec::with_capacity(9);
                 exception_response.extend_from_slice(&transaction_id);
-                exception_response.extend_from_slice(&[0x00, 0x00]);
-                exception_response.extend_from_slice(&[0x00, 0x03]);
+                exception_response.extend_from_slice(&[0x00, 0x00]); // Protocol ID
+                exception_response.extend_from_slice(&[0x00, 0x03]); // Length (Unit ID + Function + Exception Code)
                 exception_response.push(unit_id);
-                exception_response.push(pdu[0] | 0x80);
-                exception_response.push(0x0B);
+                exception_response.push(function_code | 0x80); // Exception function code
+                exception_response.push(exception_code);
 
                 return Ok(exception_response);
             }
         };
 
-        // Verify RTU CRC
-        let calculated_crc = calc_crc16(&rtu_buf[..rtu_len - 2]);
-        let received_crc = u16::from_le_bytes([rtu_buf[rtu_len - 2], rtu_buf[rtu_len - 1]]);
+        // Truncate the buffer to the actual response length
+        rtu_response.truncate(rtu_len);
 
-        if calculated_crc != received_crc {
+        // Verify the CRC16 checksum of the RTU response
+        let expected_crc = calc_crc16(&rtu_response[..rtu_len - 2]);
+        let received_crc =
+            u16::from_le_bytes([rtu_response[rtu_len - 2], rtu_response[rtu_len - 1]]);
+        if expected_crc != received_crc {
             return Err(RelayError::Frame(FrameError::Crc {
-                calculated: calculated_crc,
+                calculated: expected_crc,
                 received: received_crc,
-                frame_hex: hex::encode(&rtu_buf[..rtu_len - 2]),
+                frame_hex: hex::encode(&rtu_response[..rtu_len - 2]),
             }));
         }
 
-        // Convert RTU to TCP
-        let mut tcp_response = Vec::with_capacity(256);
-        tcp_response.extend_from_slice(&transaction_id);
-        tcp_response.extend_from_slice(&[0x00, 0x00]);
+        // Remove CRC from RTU response
+        rtu_response.truncate(rtu_len - 2);
 
-        let tcp_length = (rtu_len - 2) as u16;
-        tcp_response.extend_from_slice(&tcp_length.to_be_bytes());
-        tcp_response.extend_from_slice(&rtu_buf[..rtu_len - 2]);
+        // Verify that the unit ID in the response matches
+        if rtu_response[0] != unit_id {
+            return Err(RelayError::frame(
+                FrameErrorKind::InvalidUnitId,
+                format!(
+                    "Unexpected unit ID in RTU response: expected=0x{:02X}, received=0x{:02X}",
+                    unit_id, rtu_response[0]
+                ),
+                Some(rtu_response.clone()),
+            ));
+        }
+
+        // Convert RTU response to Modbus TCP response
+        let tcp_length = rtu_response.len() as u16; // Length of Unit ID + PDU
+        let mut tcp_response = Vec::with_capacity(7 + rtu_response.len()); // MBAP Header(7) + PDU
+        tcp_response.extend_from_slice(&transaction_id); // Transaction ID
+        tcp_response.extend_from_slice(&[0x00, 0x00]); // Protocol ID
+        tcp_response.extend_from_slice(&tcp_length.to_be_bytes()); // Length field
+        tcp_response.extend_from_slice(&rtu_response); // Unit ID + PDU
 
         Ok(tcp_response)
     }
