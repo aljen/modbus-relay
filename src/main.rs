@@ -1,5 +1,5 @@
 use clap::{Args, Parser};
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -68,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Create and run relay
-    let relay = ModbusRelay::new(config)?;
+    let relay = Arc::new(ModbusRelay::new(config)?);
     relay.run().await?;
 
     Ok(())

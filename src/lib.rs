@@ -1,3 +1,4 @@
+pub mod connection_manager;
 pub mod errors;
 pub mod modbus_relay;
 pub mod relay_config;
