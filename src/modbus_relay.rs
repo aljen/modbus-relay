@@ -1,11 +1,11 @@
-use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
+use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration, time::Instant};
 
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::{broadcast, Mutex},
     task::JoinHandle,
-    time::{sleep, timeout, Instant},
+    time::{sleep, timeout},
 };
 use tracing::{debug, error, info};
 
@@ -16,14 +16,15 @@ use crate::{
         RelayError,
     },
     generate_request_id,
+    http_api::start_http_server,
     relay_config::RelayConfig,
     rtu_transport::RtuTransport,
     IoOperation, ModbusProcessor, TransportError,
 };
 
 pub struct ModbusRelay {
-    transport: Arc<RtuTransport>,
     config: RelayConfig,
+    transport: Arc<RtuTransport>,
     connection_manager: Arc<ConnectionManager>,
     shutdown: broadcast::Sender<()>,
     main_shutdown: tokio::sync::watch::Sender<bool>,
@@ -45,9 +46,9 @@ impl ModbusRelay {
         let (main_shutdown, _) = tokio::sync::watch::channel(false);
 
         Ok(Self {
+            config,
             transport: Arc::new(transport),
             connection_manager: Arc::new(ConnectionManager::new(conn_config)),
-            config,
             shutdown: broadcast::channel(1).0,
             main_shutdown,
             tasks: Arc::new(Mutex::new(Vec::new())),
@@ -65,20 +66,79 @@ impl ModbusRelay {
     }
 
     pub async fn run(self: Arc<Self>) -> Result<(), RelayError> {
-        let addr = format!(
-            "{}:{}",
-            self.config.tcp_bind_addr, self.config.tcp_bind_port
-        );
+        let mut tasks = Vec::new();
 
-        let listener = TcpListener::bind(&addr).await.map_err(|e| {
-            RelayError::Transport(TransportError::Io {
-                operation: IoOperation::Configure,
-                details: format!("Failed to bind to address {}", addr),
-                source: e,
+        // Start TCP server
+        let tcp_server = {
+            let transport = Arc::clone(&self.transport);
+            let manager = Arc::clone(&self.connection_manager);
+            let mut rx = self.shutdown.subscribe();
+            let config = self.config.clone();
+
+            tokio::spawn(async move {
+                let addr = format!("{}:{}", config.tcp.bind_addr, config.tcp.bind_port);
+                let listener = TcpListener::bind(&addr).await.map_err(|e| {
+                    RelayError::Transport(TransportError::Io {
+                        operation: IoOperation::Listen,
+                        details: format!("Failed to bind TCP listener to {}", addr),
+                        source: e,
+                    })
+                })?;
+
+                info!("TCP server listening on {}", addr);
+
+                loop {
+                    tokio::select! {
+                        accept_result = listener.accept() => {
+                            match accept_result {
+                                Ok((socket, peer)) => {
+                                    let transport = Arc::clone(&transport);
+                                    let manager = Arc::clone(&manager);
+
+                                    tokio::spawn(async move {
+                                        if let Err(e) = handle_client(socket, peer, transport, manager).await {
+                                            error!("Client error: {}", e);
+                                        }
+                                    });
+                                }
+                                Err(e) => {
+                                    error!("Failed to accept connection: {}", e);
+                                }
+                            }
+                        }
+                        _ = rx.recv() => {
+                            info!("TCP server shutting down");
+                            break;
+                        }
+                    }
+                }
+
+                Ok::<_, RelayError>(())
             })
-        })?;
+        };
+        tasks.push(tcp_server);
 
-        info!("Listening on {}", addr);
+        // Start HTTP server if enabled
+        if self.config.http.enabled {
+            let http_server = {
+                let manager = Arc::clone(&self.connection_manager);
+                let rx = self.shutdown.subscribe();
+                let config = self.config.clone();
+
+                tokio::spawn(async move {
+                    if let Err(e) = start_http_server(config.http.port, manager, rx).await {
+                        error!("HTTP server error: {}", e);
+                        return Err(RelayError::Transport(TransportError::Io {
+                            operation: IoOperation::Listen,
+                            details: format!("HTTP server error: {}", e),
+                            source: std::io::Error::new(std::io::ErrorKind::Other, e.to_string()),
+                        }));
+                    }
+                    Ok(())
+                })
+            };
+            tasks.push(http_server);
+        }
 
         // Start a task to clean up idle connections
         let manager = Arc::clone(&self.connection_manager);
@@ -125,50 +185,17 @@ impl ModbusRelay {
 
         loop {
             tokio::select! {
-                accept_result = listener.accept() => {
-                    match accept_result {
-                        Ok((socket, peer)) => {
-                            info!("New connection from {}", peer);
-
-                            // Attempt to accept connection by connection manager
-                            match self.connection_manager.accept_connection(peer).await {
-                                Ok(guard) => {
-                                    let transport = Arc::clone(&self.transport);
-                                    let manager = Arc::clone(&self.connection_manager);
-
-                                    self.spawn_task("client", async move {
-                                        if let Err(e) =
-                                            handle_client(socket, transport, &manager, peer).await
-                                        {
-                                            error!("Client error: {}", e);
-                                            // Record failed connection in stats
-                                            if let Err(stat_err) =
-                                                manager.record_client_error(&peer).await
-                                            {
-                                                error!("Failed to record client error: {}", stat_err);
-                                            }
-                                        }
-                                        drop(guard); // Explicit drop of guard to ensure cleanup
-                                    });
-                                }
-                                Err(e) => {
-                                    error!("Connection rejected: {}", e);
-                                    // Add a delay here to slow down connection floods
-                                    sleep(Duration::from_millis(100)).await;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!("Accept error: {}", e);
-                            sleep(Duration::from_millis(100)).await;
-                        }
-                    }
-
-                }
                 _ = shutdown_rx.changed() => {
                     info!("Main loop received shutdown signal");
                     break;
                 }
+            }
+        }
+
+        // Wait for all tasks to complete
+        for task in tasks {
+            if let Err(e) = task.await {
+                error!("Task error: {}", e);
             }
         }
 
@@ -352,7 +379,7 @@ async fn process_frame(
     modbus
         .process_request(
             transaction_id,
-            frame[6],     // Unit ID
+            frame[6],    // Unit ID
             &frame[7..], // PDU
         )
         .await
@@ -382,10 +409,30 @@ async fn send_response(
 }
 
 async fn handle_client(
-    mut socket: TcpStream,
-    transport: Arc<RtuTransport>,
-    manager: &ConnectionManager,
+    stream: TcpStream,
     peer_addr: SocketAddr,
+    transport: Arc<RtuTransport>,
+    manager: Arc<ConnectionManager>,
+) -> Result<(), RelayError> {
+    let start_time = Instant::now();
+    manager.record_request(peer_addr, true).await;
+
+    let result = handle_client_inner(stream, peer_addr, transport, manager.clone()).await;
+
+    if let Err(_) = result {
+        manager.record_request(peer_addr, false).await;
+    }
+
+    manager.record_response_time(start_time.elapsed()).await;
+
+    result
+}
+
+async fn handle_client_inner(
+    mut stream: TcpStream,
+    peer_addr: SocketAddr,
+    transport: Arc<RtuTransport>,
+    manager: Arc<ConnectionManager>,
 ) -> Result<(), RelayError> {
     let request_id = generate_request_id();
 
@@ -397,7 +444,7 @@ async fn handle_client(
     );
     let _enter = client_span.enter();
 
-    socket.set_nodelay(true).map_err(|e| {
+    stream.set_nodelay(true).map_err(|e| {
         RelayError::Transport(TransportError::Io {
             operation: IoOperation::Configure,
             details: "Failed to set TCP_NODELAY".to_string(),
@@ -405,7 +452,7 @@ async fn handle_client(
         })
     })?;
 
-    let addr = socket.peer_addr().map_err(|e| {
+    let addr = stream.peer_addr().map_err(|e| {
         RelayError::Transport(TransportError::Io {
             operation: IoOperation::Control,
             details: "Failed to get peer address".to_string(),
@@ -415,12 +462,12 @@ async fn handle_client(
 
     info!("New client connected from {}", addr);
 
-    let (mut reader, mut writer) = socket.split();
+    let (mut reader, mut writer) = stream.split();
     let modbus = ModbusProcessor::new(transport);
 
     loop {
         // 1. Read frame
-        let (frame, transaction_id) = match read_frame(&mut reader, peer_addr, manager).await {
+        let (frame, transaction_id) = match read_frame(&mut reader, peer_addr, &manager).await {
             Ok((frame, id)) => (frame, id),
             Err(RelayError::Connection(ConnectionError::Disconnected)) => {
                 info!("Client {} disconnected", peer_addr);
@@ -433,18 +480,14 @@ async fn handle_client(
         let response = match process_frame(&modbus, &frame, transaction_id).await {
             Ok(response) => response,
             Err(e) => {
-                manager.record_request(peer_addr, false).await;
                 return Err(e);
             }
         };
 
         // 3. Send response
         if let Err(e) = send_response(&mut writer, &response, peer_addr).await {
-            manager.record_request(peer_addr, false).await;
             return Err(e);
         }
-
-        manager.record_request(peer_addr, true).await;
     }
 
     Ok(())

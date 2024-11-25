@@ -8,7 +8,7 @@ use crate::{errors::InitializationError, RelayConfig, RelayError};
 
 pub fn setup_logging(config: &RelayConfig) -> Result<(), RelayError> {
     // Validate logging config before proceeding
-    config.log.validate().map_err(RelayError::Init)?;
+    config.logging.validate().map_err(RelayError::Init)?;
 
     let timer = OffsetTime::new(
         UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC),
@@ -16,13 +16,13 @@ pub fn setup_logging(config: &RelayConfig) -> Result<(), RelayError> {
     );
 
     // Determine base level filter
-    let base_level = config.log.get_level_filter();
+    let base_level = config.logging.get_level_filter();
 
     // Build the EnvFilter
     let mut env_filter = EnvFilter::default().add_directive(base_level.into());
 
     // If trace_frames is enabled, add more specific filtering
-    if config.log.trace_frames {
+    if config.logging.trace_frames {
         env_filter = env_filter
             .add_directive("modbus_relay::protocol=trace".parse().unwrap())
             .add_directive("modbus_relay::transport=trace".parse().unwrap());
@@ -33,8 +33,8 @@ pub fn setup_logging(config: &RelayConfig) -> Result<(), RelayError> {
         .with_target(false)
         .with_thread_ids(true)
         .with_thread_names(true)
-        .with_file(config.log.include_location)
-        .with_line_number(config.log.include_location)
+        .with_file(config.logging.include_location)
+        .with_line_number(config.logging.include_location)
         .with_level(true)
         .with_timer(timer)
         .with_filter(env_filter);

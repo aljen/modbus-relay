@@ -32,11 +32,11 @@ impl RtuTransport {
 
         // Explicite otwieramy jako TTYPort na Unixie
         #[cfg(any(target_os = "linux", target_os = "macos"))]
-        let tty_port: TTYPort = serialport::new(&config.rtu_device, config.rtu_baud_rate)
-            .data_bits(config.data_bits.into())
-            .parity(config.parity.into())
-            .stop_bits(config.stop_bits.into())
-            .timeout(config.serial_timeout)
+        let tty_port: TTYPort = serialport::new(&config.rtu.device, config.rtu.baud_rate)
+            .data_bits(config.rtu.data_bits.into())
+            .parity(config.rtu.parity.into())
+            .stop_bits(config.rtu.stop_bits.into())
+            .timeout(config.connection.serial_timeout)
             .flow_control(serialport::FlowControl::None)
             .open_native()?;
 
@@ -91,7 +91,7 @@ impl RtuTransport {
         let rts_span = tracing::info_span!(
             "rts_control",
             signal = if on { "HIGH" } else { "LOW" },
-            delay_us = self.config.rtu_rts_delay_us,
+            delay_us = self.config.rtu.rts_delay_us,
         );
         let _enter = rts_span.enter();
 
@@ -153,7 +153,7 @@ impl RtuTransport {
         request: &[u8],
         response: &mut [u8],
     ) -> Result<usize, RelayError> {
-        if request.len() > self.config.max_frame_size {
+        if request.len() > self.config.connection.max_frame_size {
             return Err(RelayError::frame(
                 FrameErrorKind::TooLong,
                 format!("Request frame too long: {} bytes", request.len()),
@@ -161,7 +161,7 @@ impl RtuTransport {
             ));
         }
 
-        if self.config.trace_frames {
+        if self.config.logging.trace_frames {
             info!("TX: {} bytes: {:02X?}", request.len(), request);
         }
 
@@ -199,17 +199,17 @@ impl RtuTransport {
 
         let transaction_start = Instant::now();
 
-        let result = tokio::time::timeout(self.config.transaction_timeout, async {
+        let result = tokio::time::timeout(self.config.connection.transaction_timeout, async {
             let mut port = self.port.lock().await;
 
             #[cfg(feature = "rts")]
             {
                 info!("RTS -> TX mode");
-                self.set_rts(self.config.rtu_rts_type.to_signal_level(true))?;
+                self.set_rts(self.config.rtu.rts_type.to_signal_level(true))?;
 
-                if self.config.rtu_rts_delay_us > 0 {
+                if self.config.rtu.rts_delay_us > 0 {
                     info!("RTS -> TX mode [waiting]");
-                    tokio::time::sleep(Duration::from_micros(self.config.rtu_rts_delay_us)).await;
+                    tokio::time::sleep(Duration::from_micros(self.config.rtu.rts_delay_us)).await;
                 }
             }
 
@@ -230,18 +230,18 @@ impl RtuTransport {
             #[cfg(feature = "rts")]
             {
                 info!("RTS -> RX mode");
-                self.set_rts(self.config.rtu_rts_type.to_signal_level(false))?;
+                self.set_rts(self.config.rtu.rts_type.to_signal_level(false))?;
             }
 
-            if self.config.rtu_flush_after_write {
+            if self.config.rtu.flush_after_write {
                 info!("RTS -> TX mode [flushing]");
                 self.tc_flush()?;
             }
 
             #[cfg(feature = "rts")]
-            if self.config.rtu_rts_delay_us > 0 {
+            if self.config.rtu.rts_delay_us > 0 {
                 info!("RTS -> RX mode [waiting]");
-                tokio::time::sleep(Duration::from_micros(self.config.rtu_rts_delay_us)).await;
+                tokio::time::sleep(Duration::from_micros(self.config.rtu.rts_delay_us)).await;
             }
 
             // Read response
@@ -333,7 +333,7 @@ impl RtuTransport {
                 });
             }
 
-            if self.config.trace_frames && total_bytes > 0 {
+            if self.config.logging.trace_frames && total_bytes > 0 {
                 info!(
                     "RX: {} bytes: {:02X?}",
                     total_bytes,
@@ -346,7 +346,7 @@ impl RtuTransport {
         .await
         .map_err(|elapsed| TransportError::Timeout {
             elapsed: transaction_start.elapsed(),
-            limit: self.config.transaction_timeout,
+            limit: self.config.connection.transaction_timeout,
             source: elapsed,
         })?;
 

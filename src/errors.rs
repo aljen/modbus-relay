@@ -257,6 +257,7 @@ pub enum IoOperation {
     Flush,
     Configure,
     Control,
+    Listen,
 }
 
 impl InitializationError {
@@ -371,6 +372,7 @@ impl std::fmt::Display for IoOperation {
             Self::Flush => write!(f, "flush"),
             Self::Configure => write!(f, "configure"),
             Self::Control => write!(f, "control"),
+            Self::Listen => write!(f, "listen"),
         }
     }
 }

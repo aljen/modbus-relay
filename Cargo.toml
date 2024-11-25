@@ -27,6 +27,7 @@ include = ["src/**/*", "LICENSE*", "README.md", "CHANGELOG.md"]
 maintenance = { status = "actively-developed" }
 
 [dependencies]
+axum = "0.7.9"
 clap = { version = "4.5.21", features = ["derive"] }
 futures = "0.3.31"
 hex = "0.4.3"
@@ -39,8 +40,14 @@ serialport = "4.6.0"
 thiserror = "2.0.3"
 time = { version = "0.3.36", features = ["local-offset"] }
 tokio = { version = "1.41.1", features = ["full"] }
+tower = "0.5.1"
+tower-http = { version = "0.6.2", features = ["trace"] }
 tracing = "0.1.40"
-tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json", "time"] }
+tracing-subscriber = { version = "0.3.18", features = [
+  "env-filter",
+  "json",
+  "time",
+] }
 
 [dev-dependencies]
 tempdir = "0.3.7"

@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore};
@@ -92,6 +92,14 @@ pub struct ConnectionManager {
     config: ConnectionConfig,
     /// Counter of all connections
     total_connections: Arc<AtomicU64>,
+    /// Total requests
+    total_requests: AtomicU64,
+    /// Error count
+    error_count: AtomicU32,
+    /// Start time
+    start_time: Instant,
+    /// Response times
+    response_times: Arc<Mutex<VecDeque<Duration>>>,
 }
 
 impl ConnectionConfig {
@@ -140,6 +148,10 @@ impl ConnectionManager {
             stats: Arc::new(Mutex::new(HashMap::new())),
             config,
             total_connections: Arc::new(AtomicU64::new(0)),
+            total_requests: AtomicU64::new(0),
+            error_count: AtomicU32::new(0),
+            start_time: Instant::now(),
+            response_times: Arc::new(Mutex::new(VecDeque::with_capacity(100))),
         }
     }
 
@@ -332,6 +344,53 @@ impl ConnectionManager {
             total_errors,
             per_ip_stats,
         })
+    }
+
+    pub async fn connection_count(&self) -> u32 {
+        self.stats.lock().await.len() as u32
+    }
+
+    pub fn total_requests(&self) -> u64 {
+        self.total_requests.load(Ordering::Relaxed)
+    }
+
+    pub fn error_count(&self) -> u32 {
+        self.error_count.load(Ordering::Relaxed)
+    }
+
+    pub async fn avg_response_time(&self) -> Duration {
+        let times = self.response_times.lock().await;
+        if times.is_empty() {
+            return Duration::from_millis(0);
+        }
+        let sum: Duration = times.iter().sum();
+        sum / times.len() as u32
+    }
+
+    pub fn requests_per_second(&self) -> f64 {
+        let total = self.total_requests.load(Ordering::Relaxed) as f64;
+        let elapsed = self.start_time.elapsed().as_secs_f64();
+        if elapsed > 0.0 {
+            total / elapsed
+        } else {
+            0.0
+        }
+    }
+
+    pub fn record_requests(&self) {
+        self.total_requests.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_errors(&self) {
+        self.error_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub async fn record_response_time(&self, duration: Duration) {
+        let mut times = self.response_times.lock().await;
+        if times.len() >= 100 {
+            times.pop_front();
+        }
+        times.push_back(duration);
     }
 }
 
