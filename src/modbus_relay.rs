@@ -1,9 +1,11 @@
 use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
+
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::broadcast,
-    time::{sleep, timeout},
+    sync::{broadcast, Mutex},
+    task::JoinHandle,
+    time::{sleep, timeout, Instant},
 };
 use tracing::{debug, error, info};
 
@@ -23,6 +25,8 @@ pub struct ModbusRelay {
     config: RelayConfig,
     connection_manager: Arc<ConnectionManager>,
     shutdown: broadcast::Sender<()>,
+    main_shutdown: tokio::sync::watch::Sender<bool>,
+    tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
 impl ModbusRelay {
@@ -37,11 +41,15 @@ impl ModbusRelay {
             .validate()
             .map_err(|e| RelayError::Config(ConfigValidationError::connection(e.to_string())))?;
 
+        let (main_shutdown, _) = tokio::sync::watch::channel(false);
+
         Ok(Self {
             transport: Arc::new(transport),
             connection_manager: Arc::new(ConnectionManager::new(conn_config)),
             config,
             shutdown: broadcast::channel(1).0,
+            main_shutdown,
+            tasks: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -51,6 +59,8 @@ impl ModbusRelay {
     {
         let task = tokio::spawn(future);
         debug!("Spawned {} task: {:?}", name, task.id());
+
+        let _ = self.tasks.try_lock().map(|mut guard| guard.push(task));
     }
 
     pub async fn run(self: Arc<Self>) -> Result<(), RelayError> {
@@ -97,10 +107,10 @@ impl ModbusRelay {
             loop {
                 tokio::select! {
                     _ = sleep(Duration::from_secs(300)) => {
-                      match manager.get_stats().await {
-                        Ok(stats) => info!("Connection stats: {:?}", stats),
-                        Err(e) => error!("Failed to get connection stats: {}", e),
-                      }
+                        match manager.get_stats().await {
+                            Ok(stats) => info!("Connection stats: {:?}", stats),
+                            Err(e) => error!("Failed to get connection stats: {}", e),
+                        }
                     }
                     _ = shutdown_rx.recv() => {
                         debug!("Stats task received shutdown signal");
@@ -110,50 +120,78 @@ impl ModbusRelay {
             }
         });
 
+        let mut shutdown_rx = self.main_shutdown.subscribe();
+
         loop {
-            let accept_result = listener.accept().await;
-            match accept_result {
-                Ok((socket, peer)) => {
-                    info!("New connection from {}", peer);
+            tokio::select! {
+                accept_result = listener.accept() => {
+                    match accept_result {
+                        Ok((socket, peer)) => {
+                            info!("New connection from {}", peer);
 
-                    // Attempt to accept connection by connection manager
-                    match self.connection_manager.accept_connection(peer).await {
-                        Ok(guard) => {
-                            let transport = Arc::clone(&self.transport);
-                            let manager = Arc::clone(&self.connection_manager);
+                            // Attempt to accept connection by connection manager
+                            match self.connection_manager.accept_connection(peer).await {
+                                Ok(guard) => {
+                                    let transport = Arc::clone(&self.transport);
+                                    let manager = Arc::clone(&self.connection_manager);
 
-                            self.spawn_task("client", async move {
-                                if let Err(e) =
-                                    handle_client(socket, transport, &manager, peer).await
-                                {
-                                    error!("Client error: {}", e);
-                                    // Record failed connection in stats
-                                    if let Err(stat_err) = manager.record_client_error(&peer).await
-                                    {
-                                        error!("Failed to record client error: {}", stat_err);
-                                    }
+                                    self.spawn_task("client", async move {
+                                        if let Err(e) =
+                                            handle_client(socket, transport, &manager, peer).await
+                                        {
+                                            error!("Client error: {}", e);
+                                            // Record failed connection in stats
+                                            if let Err(stat_err) =
+                                                manager.record_client_error(&peer).await
+                                            {
+                                                error!("Failed to record client error: {}", stat_err);
+                                            }
+                                        }
+                                        drop(guard); // Explicit drop of guard to ensure cleanup
+                                    });
                                 }
-                                drop(guard); // Explicit drop of guard to ensure cleanup
-                            });
+                                Err(e) => {
+                                    error!("Connection rejected: {}", e);
+                                    // Add a delay here to slow down connection floods
+                                    sleep(Duration::from_millis(100)).await;
+                                }
+                            }
                         }
                         Err(e) => {
-                            error!("Connection rejected: {}", e);
-                            // Add a delay here to slow down connection floods
+                            error!("Accept error: {}", e);
                             sleep(Duration::from_millis(100)).await;
                         }
                     }
+
                 }
-                Err(e) => {
-                    error!("Accept error: {}", e);
-                    sleep(Duration::from_millis(100)).await;
+                _ = shutdown_rx.changed() => {
+                    info!("Main loop received shutdown signal");
+                    break;
                 }
             }
         }
+
+        info!("Main loop exited");
+        Ok(())
     }
 
     /// Graceful shutdown
     pub async fn shutdown(&self) -> Result<(), RelayError> {
         info!("Initiating graceful shutdown");
+        let timeout_duration = Duration::from_secs(5);
+
+        let _ = self.main_shutdown.send(true);
+
+        // 1. Log initial state
+        if let Ok(stats) = self.connection_manager.get_stats().await {
+            info!(
+                "Current state: {} active connections, {} total requests",
+                stats.active_connections, stats.total_requests
+            );
+        }
+
+        // 2. Sending shutdown signal to all tasks
+        info!("Sending shutdown signal to tasks");
         self.shutdown.send(()).map_err(|e| {
             RelayError::Connection(ConnectionError::InvalidState(format!(
                 "Failed to send shutdown signal: {}",
@@ -161,9 +199,70 @@ impl ModbusRelay {
             )))
         })?;
 
-        // Allow time for active connections to close
-        sleep(Duration::from_secs(5)).await;
+        // 3. Initiate connection shutdown
+        info!("Initiating connection shutdown");
+        if let Err(e) = self.connection_manager.close_all_connections().await {
+            error!("Error initiating connection shutdown: {}", e);
+        }
 
+        // 4. Wait for connections to close with timeout
+        let start = Instant::now();
+        loop {
+            if start.elapsed() >= timeout_duration {
+                error!("Timeout waiting for connections to close");
+                break;
+            }
+
+            if let Ok(stats) = self.connection_manager.get_stats().await {
+                if stats.active_connections == 0 {
+                    info!("All connections closed");
+                    break;
+                }
+                info!(
+                    "Waiting for {} connections to close",
+                    stats.active_connections
+                );
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+
+        // 5. Now we can safely close the serial port
+        info!("Closing serial port");
+        if let Err(e) = self.transport.close().await {
+            error!("Error closing serial port: {}", e);
+        }
+
+        // 6. Waiting for all tasks to complete
+        info!("Waiting for tasks to complete");
+        let tasks = {
+            let mut tasks_guard = self.tasks.lock().await;
+            tasks_guard.drain(..).collect::<Vec<_>>()
+        };
+
+        match tokio::time::timeout(timeout_duration, futures::future::join_all(tasks)).await {
+            Ok(results) => {
+                let mut failed = 0;
+                for (i, result) in results.into_iter().enumerate() {
+                    if let Err(e) = result {
+                        error!("Task {} failed during shutdown: {}", i, e);
+                        failed += 1;
+                    }
+                }
+                if failed > 0 {
+                    error!("{} tasks failed during shutdown", failed);
+                } else {
+                    info!("All tasks completed successfully");
+                }
+            }
+            Err(_) => {
+                error!(
+                    "Timeout waiting for tasks to complete after {:?}",
+                    timeout_duration
+                );
+            }
+        }
+
+        info!("Shutdown complete");
         Ok(())
     }
 }

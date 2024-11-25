@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore};
+use tracing::info;
 
 use crate::errors::ConnectionError;
 use crate::{ConfigValidationError, RelayError};
@@ -202,6 +203,19 @@ impl ConnectionManager {
             addr,
             _global_permit: global_permit,
         })
+    }
+
+    pub async fn close_all_connections(&self) -> Result<(), RelayError> {
+        let stats = self.stats.lock().await;
+        let active_connections = stats.values().map(|s| s.active_connections).sum::<usize>();
+
+        if active_connections > 0 {
+            info!("Closing {} active connections", active_connections);
+            // TODO(aljen): Here we can add code to forcefully close connections
+            // e.g., by sending a signal to all ConnectionGuard
+        }
+
+        Ok(())
     }
 
     pub async fn record_client_error(&self, addr: &SocketAddr) -> Result<(), RelayError> {

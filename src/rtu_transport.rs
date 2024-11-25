@@ -63,6 +63,29 @@ impl RtuTransport {
         })
     }
 
+    pub async fn close(&self) -> Result<(), TransportError> {
+        let port = self.port.lock().await;
+        port.clear(serialport::ClearBuffer::All)
+            .map_err(|e| TransportError::Io {
+                operation: IoOperation::Flush,
+                details: "Failed to clear buffers".to_string(),
+                source: std::io::Error::new(std::io::ErrorKind::Other, e.description),
+            })?;
+
+        #[cfg(unix)]
+        unsafe {
+            if libc::close(self.raw_fd) != 0 {
+                return Err(TransportError::Io {
+                    operation: IoOperation::Control,
+                    details: "Failed to close serial port".to_string(),
+                    source: std::io::Error::last_os_error(),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     #[cfg(feature = "rts")]
     fn set_rts(&self, on: bool) -> Result<(), TransportError> {
         // Get raw fd from the port
