@@ -10,9 +10,13 @@ use tracing::{debug, error, info};
 
 use crate::{
     connection_manager::{ConnectionConfig, ConnectionManager},
-    errors::{ClientErrorKind, FrameErrorKind, ProtocolErrorKind, RelayError},
+    errors::{
+        ClientErrorKind, ConfigValidationError, ConnectionError, FrameError, FrameErrorKind,
+        ProtocolErrorKind, RelayError,
+    },
     relay_config::RelayConfig,
     rtu_transport::RtuTransport,
+    IoOperation, TransportError,
 };
 
 pub struct ModbusRelay {
@@ -24,8 +28,15 @@ pub struct ModbusRelay {
 
 impl ModbusRelay {
     pub fn new(config: RelayConfig) -> Result<Self, RelayError> {
-        let transport = RtuTransport::new(&config).map_err(RelayError::Transport)?;
+        // Validate the config first
+        config.validate()?;
+
+        let transport = RtuTransport::new(&config)?;
+
         let conn_config = ConnectionConfig::default(); // TODO: Add to RelayConfig
+        conn_config
+            .validate()
+            .map_err(|e| RelayError::Config(ConfigValidationError::connection(e.to_string())))?;
 
         Ok(Self {
             transport: Arc::new(transport),
@@ -48,7 +59,15 @@ impl ModbusRelay {
             "{}:{}",
             self.config.tcp_bind_addr, self.config.tcp_bind_port
         );
-        let listener = TcpListener::bind(&addr).await?;
+
+        let listener = TcpListener::bind(&addr).await.map_err(|e| {
+            RelayError::Transport(TransportError::Io {
+                operation: IoOperation::Configure,
+                details: format!("Failed to bind to address {}", addr),
+                source: e,
+            })
+        })?;
+
         info!("Listening on {}", addr);
 
         // Start a task to clean up idle connections
@@ -59,7 +78,9 @@ impl ModbusRelay {
             loop {
                 tokio::select! {
                     _ = sleep(Duration::from_secs(60)) => {
-                        manager.cleanup_idle_connections().await;
+                        if let Err(e) = manager.cleanup_idle_connections().await {
+                            error!("Error during connection cleanup: {}", e);
+                        }
                     }
                     _ = shutdown_rx.recv() => {
                         debug!("Cleanup task received shutdown signal");
@@ -77,8 +98,10 @@ impl ModbusRelay {
             loop {
                 tokio::select! {
                     _ = sleep(Duration::from_secs(300)) => {
-                        let stats = manager.get_stats().await;
-                        info!("Connection stats: {:?}", stats);
+                      match manager.get_stats().await {
+                        Ok(stats) => info!("Connection stats: {:?}", stats),
+                        Err(e) => error!("Failed to get connection stats: {}", e),
+                      }
                     }
                     _ = shutdown_rx.recv() => {
                         debug!("Stats task received shutdown signal");
@@ -105,6 +128,11 @@ impl ModbusRelay {
                                     handle_client(socket, transport, &manager, peer).await
                                 {
                                     error!("Client error: {}", e);
+                                    // Record failed connection in stats
+                                    if let Err(stat_err) = manager.record_client_error(&peer).await
+                                    {
+                                        error!("Failed to record client error: {}", stat_err);
+                                    }
                                 }
                                 drop(guard); // Explicit drop of guard to ensure cleanup
                             });
@@ -125,12 +153,19 @@ impl ModbusRelay {
     }
 
     /// Graceful shutdown
-    pub async fn shutdown(&self) {
+    pub async fn shutdown(&self) -> Result<(), RelayError> {
         info!("Initiating graceful shutdown");
-        let _ = self.shutdown.send(());
+        self.shutdown.send(()).map_err(|e| {
+            RelayError::Connection(ConnectionError::InvalidState(format!(
+                "Failed to send shutdown signal: {}",
+                e
+            )))
+        })?;
 
         // Allow time for active connections to close
         sleep(Duration::from_secs(5)).await;
+
+        Ok(())
     }
 }
 
@@ -156,9 +191,22 @@ async fn handle_client(
     manager: &ConnectionManager,
     peer_addr: SocketAddr,
 ) -> Result<(), RelayError> {
-    socket.set_nodelay(true)?;
+    socket.set_nodelay(true).map_err(|e| {
+        RelayError::Transport(TransportError::Io {
+            operation: IoOperation::Configure,
+            details: "Failed to set TCP_NODELAY".to_string(),
+            source: e,
+        })
+    })?;
 
-    let addr = socket.peer_addr()?;
+    let addr = socket.peer_addr().map_err(|e| {
+        RelayError::Transport(TransportError::Io {
+            operation: IoOperation::Control,
+            details: "Failed to get peer address".to_string(),
+            source: e,
+        })
+    })?;
+
     info!("New client connected from {}", addr);
 
     let (mut reader, mut writer) = socket.split();
@@ -185,19 +233,15 @@ async fn handle_client(
             }
             Ok(Err(e)) => {
                 manager.record_request(peer_addr, false).await;
-                return Err(RelayError::client(
-                    ClientErrorKind::ConnectionLost,
-                    peer_addr,
-                    e.to_string(),
-                ));
+                return Err(RelayError::Connection(ConnectionError::InvalidState(
+                    format!("Connection lost: {}", e),
+                )));
             }
             Err(_) => {
                 manager.record_request(peer_addr, false).await;
-                return Err(RelayError::client(
-                    ClientErrorKind::Timeout,
-                    peer_addr,
-                    "Read timeout".to_string(),
-                ));
+                return Err(RelayError::Connection(ConnectionError::Timeout(
+                    "Read operation timed out".to_string(),
+                )));
             }
         };
 
@@ -285,7 +329,7 @@ async fn handle_client(
                     ));
                 }
 
-                return Err(RelayError::Transport(e));
+                return Err(e.into());
             }
         };
 
@@ -295,11 +339,11 @@ async fn handle_client(
 
         if calculated_crc != received_crc {
             manager.record_request(peer_addr, false).await;
-            return Err(RelayError::InvalidCrc {
+            return Err(RelayError::Frame(FrameError::Crc {
                 calculated: calculated_crc,
                 received: received_crc,
                 frame_hex: hex::encode(&rtu_buf[..rtu_len - 2]),
-            });
+            }));
         }
 
         // Convert RTU to TCP
@@ -330,4 +374,53 @@ async fn handle_client(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    #[tokio::test]
+    async fn test_modbus_relay_shutdown() {
+        let config = RelayConfig::default();
+        let relay = ModbusRelay::new(config).unwrap();
+
+        assert!(relay.shutdown().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_client_invalid_protocol() {
+        let config = RelayConfig::default();
+        let transport = RtuTransport::new(&config).unwrap();
+        let manager = ConnectionManager::new(ConnectionConfig::default());
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+
+        // Create a mock socket that sends invalid protocol ID
+        let (client, server) = tokio::io::duplex(64);
+        let mut client_writer = tokio::io::BufWriter::new(client);
+
+        // Write invalid protocol frame
+        let invalid_frame = [
+            0x00, 0x01, 0x01, 0x00, 0x00, 0x06, 0x01, 0x03, 0x00, 0x00, 0x00, 0x01,
+        ];
+        client_writer.write_all(&invalid_frame).await.unwrap();
+        client_writer.flush().await.unwrap();
+
+        let result = handle_client(
+            server.try_into().unwrap(),
+            Arc::new(transport),
+            &manager,
+            addr,
+        )
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(RelayError::Protocol {
+                kind: ProtocolErrorKind::InvalidProtocolId,
+                ..
+            })
+        ));
+    }
 }

@@ -12,24 +12,16 @@ use serialport::SerialPort;
 use tokio::sync::Mutex;
 use tracing::{info, trace};
 
-use crate::{RelayConfig, TransportError};
-
 #[cfg(feature = "rts")]
-use crate::RtsType;
+use crate::RtsError;
+use crate::{FrameErrorKind, IoOperation, RelayConfig, RelayError, TransportError};
 
 pub struct RtuTransport {
     port: Mutex<Box<dyn SerialPort>>,
-    transaction_timeout: Duration,
-    trace_frames: bool,
+    config: RelayConfig,
 
-    #[cfg(feature = "rts")]
-    rts_delay_us: u64,
-    #[cfg(feature = "rts")]
-    rts_type: RtsType,
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     raw_fd: i32,
-
-    rtu_flush_after_write: bool,
 }
 
 impl RtuTransport {
@@ -63,16 +55,9 @@ impl RtuTransport {
 
         Ok(Self {
             port: Mutex::new(port),
-            transaction_timeout: config.transaction_timeout,
-            trace_frames: config.trace_frames,
-            #[cfg(feature = "rts")]
-            rts_delay_us: config.rtu_rts_delay_us,
-            #[cfg(feature = "rts")]
-            rts_type: config.rtu_rts_type,
+            config: config.clone(),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             raw_fd,
-
-            rtu_flush_after_write: config.rtu_flush_after_write,
         })
     }
 
@@ -85,11 +70,10 @@ impl RtuTransport {
 
             // Get current flags
             if libc::ioctl(self.raw_fd, TIOCMGET, &mut flags) < 0 {
-                return Err(TransportError::Io {
-                    operation: IoOperation::Control,
-                    details: "Failed to get RTS flags".to_string(),
-                    source: std::io::Error::last_os_error(),
-                });
+                return Err(TransportError::Rts(RtsError::signal(format!(
+                    "Failed to get RTS flags: {}",
+                    std::io::Error::last_os_error()
+                ))));
             }
 
             // Modify RTS flag
@@ -101,11 +85,10 @@ impl RtuTransport {
 
             // Set new flags
             if libc::ioctl(self.raw_fd, TIOCMSET, &flags) < 0 {
-                return Err(TransportError::Io {
-                    operation: IoOperation::Control,
-                    details: "Failed to set RTS flags".to_string(),
-                    source: std::io::Error::last_os_error(),
-                });
+                return Err(TransportError::Rts(RtsError::signal(format!(
+                    "Failed to set RTS flags: {}",
+                    std::io::Error::last_os_error()
+                ))));
             }
 
             info!("RTS set to {}", if on { "HIGH" } else { "LOW" });
@@ -116,13 +99,14 @@ impl RtuTransport {
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn tc_flush(&self) -> Result<(), TransportError> {
-        use crate::IoOperation;
-
         unsafe {
             if libc::tcflush(self.raw_fd, libc::TCIOFLUSH) != 0 {
                 return Err(TransportError::Io {
                     operation: IoOperation::Flush,
-                    details: "Failed to flush the serial port".to_string(),
+                    details: format!(
+                        "Failed to flush serial port: {}",
+                        std::io::Error::last_os_error()
+                    ),
                     source: std::io::Error::last_os_error(),
                 });
             }
@@ -157,66 +141,106 @@ impl RtuTransport {
         &self,
         request: &[u8],
         response: &mut [u8],
-    ) -> Result<usize, TransportError> {
-        if self.trace_frames {
+    ) -> Result<usize, RelayError> {
+        if request.len() > self.config.max_frame_size {
+            return Err(RelayError::frame(
+                FrameErrorKind::TooLong,
+                format!("Request frame too long: {} bytes", request.len()),
+                Some(request.to_vec()),
+            ));
+        }
+
+        if self.config.trace_frames {
             info!("TX: {} bytes: {:02X?}", request.len(), request);
         }
 
-        let function = request[1];
-        let quantity = if function == 0x03 || function == 0x04 {
-            u16::from_be_bytes([request[4], request[5]])
+        let function = request.get(1).ok_or_else(|| {
+            RelayError::frame(
+                FrameErrorKind::InvalidFormat,
+                "Request too short to contain function code".to_string(),
+                Some(request.to_vec()),
+            )
+        })?;
+
+        let quantity = if *function == 0x03 || *function == 0x04 {
+            u16::from_be_bytes([
+                *request.get(4).ok_or_else(|| {
+                    RelayError::frame(
+                        FrameErrorKind::InvalidFormat,
+                        "Request too short for register quantity".to_string(),
+                        Some(request.to_vec()),
+                    )
+                })?,
+                *request.get(5).ok_or_else(|| {
+                    RelayError::frame(
+                        FrameErrorKind::InvalidFormat,
+                        "Request too short for register quantity".to_string(),
+                        Some(request.to_vec()),
+                    )
+                })?,
+            ])
         } else {
             1
         };
 
-        let expected_size = Self::guess_response_size(function, quantity);
+        let expected_size = Self::guess_response_size(*function, quantity);
         info!("Expected response size: {} bytes", expected_size);
 
         let transaction_start = Instant::now();
 
-        tokio::time::timeout(self.transaction_timeout, async {
+        let result = tokio::time::timeout(self.config.transaction_timeout, async {
             let mut port = self.port.lock().await;
-            let mut total_bytes = 0;
 
             #[cfg(feature = "rts")]
             {
                 info!("RTS -> TX mode");
-                self.set_rts(self.rts_type.to_signal_level(true))?;
+                self.set_rts(self.config.rtu_rts_type.to_signal_level(true))?;
 
-                if self.rts_delay_us > 0 {
+                if self.config.rtu_rts_delay_us > 0 {
                     info!("RTS -> TX mode [waiting]");
-                    tokio::time::sleep(Duration::from_micros(self.rts_delay_us)).await;
+                    tokio::time::sleep(Duration::from_micros(self.config.rtu_rts_delay_us)).await;
                 }
             }
 
             // Write request
             info!("Writing request");
-            port.write_all(request).map_err(TransportError::from)?;
-            port.flush().map_err(TransportError::from)?;
+            port.write_all(request).map_err(|e| TransportError::Io {
+                operation: IoOperation::Write,
+                details: "Failed to write request".to_string(),
+                source: e,
+            })?;
+
+            port.flush().map_err(|e| TransportError::Io {
+                operation: IoOperation::Flush,
+                details: "Failed to flush write buffer".to_string(),
+                source: e,
+            })?;
 
             #[cfg(feature = "rts")]
             {
                 info!("RTS -> RX mode");
-                self.set_rts(self.rts_type.to_signal_level(false))?;
+                self.set_rts(self.config.rtu_rts_type.to_signal_level(false))?;
             }
 
-            if self.rtu_flush_after_write {
+            if self.config.rtu_flush_after_write {
                 info!("RTS -> TX mode [flushing]");
                 self.tc_flush()?;
             }
 
             #[cfg(feature = "rts")]
-            if self.rts_delay_us > 0 {
+            if self.config.rtu_rts_delay_us > 0 {
                 info!("RTS -> RX mode [waiting]");
-                tokio::time::sleep(Duration::from_micros(self.rts_delay_us)).await;
+                tokio::time::sleep(Duration::from_micros(self.config.rtu_rts_delay_us)).await;
             }
 
             // Read response
             trace!("Reading response (expecting {} bytes)", expected_size);
-            let mut last_read_time = tokio::time::Instant::now();
-            let inter_byte_timeout = Duration::from_millis(100);
-            let mut consecutive_timeouts = 0;
+
             const MAX_TIMEOUTS: u8 = 3;
+            let mut total_bytes = 0;
+            let mut consecutive_timeouts = 0;
+            let inter_byte_timeout = Duration::from_millis(100);
+            let mut last_read_time = tokio::time::Instant::now();
 
             while total_bytes < expected_size {
                 match port.read(&mut response[total_bytes..]) {
@@ -268,7 +292,13 @@ impl RtuTransport {
                         }
                         tokio::task::yield_now().await;
                     }
-                    Err(e) => return Err(TransportError::from(e)),
+                    Err(e) => {
+                        return Err(TransportError::Io {
+                            operation: IoOperation::Read,
+                            details: "Failed to read response".to_string(),
+                            source: e,
+                        });
+                    }
                 }
             }
 
@@ -280,7 +310,19 @@ impl RtuTransport {
                 });
             }
 
-            if self.trace_frames && total_bytes > 0 {
+            // Verify minimum response size
+            if total_bytes < 3 {
+                return Err(TransportError::Io {
+                    operation: IoOperation::Read,
+                    details: format!("Response too short: {} bytes", total_bytes),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Response too short",
+                    ),
+                });
+            }
+
+            if self.config.trace_frames && total_bytes > 0 {
                 info!(
                     "RX: {} bytes: {:02X?}",
                     total_bytes,
@@ -293,8 +335,10 @@ impl RtuTransport {
         .await
         .map_err(|elapsed| TransportError::Timeout {
             elapsed: transaction_start.elapsed(),
-            limit: self.transaction_timeout,
+            limit: self.config.transaction_timeout,
             source: elapsed,
-        })?
+        })?;
+
+        Ok(result?)
     }
 }

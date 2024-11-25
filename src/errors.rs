@@ -7,39 +7,21 @@ pub enum RelayError {
     #[error("Transport error: {0}")]
     Transport(#[from] TransportError),
 
-    #[error("Network error: {0}")]
-    Network(#[from] std::io::Error),
-
     #[error("Protocol error: {kind} - {details}")]
     Protocol {
         kind: ProtocolErrorKind,
         details: String,
-        #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 
-    #[error("Configuration error: {kind} - {details}")]
-    Config {
-        kind: ConfigErrorKind,
-        details: String,
-    },
+    #[error("Configuration error: {0}")]
+    Config(#[from] ConfigValidationError),
 
-    #[error("Frame error: {kind} - {details}")]
-    Frame {
-        kind: FrameErrorKind,
-        details: String,
-        frame_data: Option<Vec<u8>>,
-    },
+    #[error("Frame error: {0}")]
+    Frame(#[from] FrameError),
 
-    #[error("Buffer overflow: requested {requested} bytes, max {max} bytes")]
-    BufferOverflow { requested: usize, max: usize },
-
-    #[error("CRC error: calculated={calculated:04X}, received={received:04X}, frame={frame_hex}")]
-    InvalidCrc {
-        calculated: u16,
-        received: u16,
-        frame_hex: String,
-    },
+    #[error("Connection error: {0}")]
+    Connection(#[from] ConnectionError),
 
     #[error("Client error: {kind} from {client_addr} - {details}")]
     Client {
@@ -60,6 +42,9 @@ pub enum TransportError {
         source: Option<serialport::Error>,
     },
 
+    #[error("Network error: {0}")]
+    Network(std::io::Error),
+
     #[error("I/O error during {operation}: {details}")]
     Io {
         operation: IoOperation,
@@ -79,18 +64,71 @@ pub enum TransportError {
     #[error("No response received after {attempts} attempts over {elapsed:?}")]
     NoResponse { attempts: u8, elapsed: Duration },
 
-    #[error("RTS control failed: {details}")]
-    RtsError {
-        details: String,
-        #[source]
-        source: Option<std::io::Error>,
-    },
+    #[error("RTS error: {0}")]
+    Rts(#[from] RtsError),
 }
 
-#[derive(Debug)]
-pub struct ValidationError {
-    pub kind: ConfigErrorKind,
-    pub details: String,
+#[derive(Error, Debug)]
+pub enum ConnectionError {
+    #[error("Connection limit exceeded: {0}")]
+    LimitExceeded(String),
+
+    #[error("Connection timed out: {0}")]
+    Timeout(String),
+
+    #[error("Invalid connection state: {0}")]
+    InvalidState(String),
+
+    #[error("Connection rejected: {0}")]
+    Rejected(String),
+
+    #[error("Backoff error: {0}")]
+    Backoff(#[from] BackoffError),
+}
+
+#[derive(Error, Debug)]
+pub enum BackoffError {
+    #[error("Maximum retries exceeded")]
+    MaxRetriesExceeded,
+
+    #[error("Invalid backoff configuration: {0}")]
+    InvalidConfig(String),
+
+    #[error("Retry attempt failed: {0}")]
+    RetryFailed(String),
+}
+
+#[derive(Error, Debug)]
+pub enum ConfigValidationError {
+    #[error("Invalid TCP configuration: {0}")]
+    InvalidTcp(String),
+
+    #[error("Invalid RTU configuration: {0}")]
+    InvalidRtu(String),
+
+    #[error("Invalid timing configuration: {0}")]
+    InvalidTiming(String),
+
+    #[error("Invalid security configuration: {0}")]
+    InvalidSecurity(String),
+
+    #[error("Invalid connection configuration: {0}")]
+    InvalidConnection(String),
+}
+
+#[derive(Error, Debug)]
+pub enum RtsError {
+    #[error("Failed to set RTS signal: {0}")]
+    SignalError(String),
+
+    #[error("RTS timing error: {0}")]
+    TimingError(String),
+
+    #[error("RTS configuration error: {0}")]
+    ConfigError(String),
+
+    #[error("RTS system error: {0}")]
+    SystemError(#[from] std::io::Error),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,17 +147,42 @@ pub enum ProtocolErrorKind {
     InvalidPdu,
 }
 
+#[derive(Error, Debug)]
+pub enum FrameError {
+    #[error("Frame size error: {kind} - {details}")]
+    Size {
+        kind: FrameSizeKind,
+        details: String,
+        frame_data: Option<Vec<u8>>,
+    },
+
+    #[error("Frame format error: {kind} - {details}")]
+    Format {
+        kind: FrameFormatKind,
+        details: String,
+        frame_data: Option<Vec<u8>>,
+    },
+
+    #[error("CRC error: calculated={calculated:04X}, received={received:04X}, frame={frame_hex}")]
+    Crc {
+        calculated: u16,
+        received: u16,
+        frame_hex: String,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConfigErrorKind {
-    InvalidTcpAddress,
-    InvalidTcpPort,
-    InvalidBaudRate,
-    InvalidDataBits,
-    InvalidParity,
-    InvalidStopBits,
-    InvalidTimeout,
-    InvalidRtsSettings,
-    InvalidFrameSize,
+pub enum FrameSizeKind {
+    TooShort,
+    TooLong,
+    BufferOverflow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameFormatKind {
+    InvalidHeader,
+    InvalidFormat,
+    UnexpectedResponse,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,18 +225,22 @@ pub enum IoOperation {
     Control,
 }
 
-impl std::fmt::Display for ConfigErrorKind {
+impl std::fmt::Display for FrameSizeKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InvalidTcpAddress => write!(f, "Invalid TCP address"),
-            Self::InvalidTcpPort => write!(f, "Invalid TCP port"),
-            Self::InvalidBaudRate => write!(f, "Invalid baud rate"),
-            Self::InvalidDataBits => write!(f, "Invalid data bits"),
-            Self::InvalidParity => write!(f, "Invalid parity"),
-            Self::InvalidStopBits => write!(f, "Invalid stop bits"),
-            Self::InvalidTimeout => write!(f, "Invalid timeout"),
-            Self::InvalidRtsSettings => write!(f, "Invalid RTS settings"),
-            Self::InvalidFrameSize => write!(f, "Invalid frame size"),
+            Self::TooShort => write!(f, "Frame too short"),
+            Self::TooLong => write!(f, "Frame too long"),
+            Self::BufferOverflow => write!(f, "Buffer overflow"),
+        }
+    }
+}
+
+impl std::fmt::Display for FrameFormatKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidHeader => write!(f, "Invalid frame header"),
+            Self::InvalidFormat => write!(f, "Invalid frame format"),
+            Self::UnexpectedResponse => write!(f, "Unexpected response"),
         }
     }
 }
@@ -302,11 +369,12 @@ impl RelayError {
         }
     }
 
-    pub fn config(kind: ConfigErrorKind, details: impl Into<String>) -> Self {
-        RelayError::Config {
-            kind,
-            details: details.into(),
-        }
+    pub fn connection(kind: ConnectionError) -> Self {
+        RelayError::Connection(kind)
+    }
+
+    pub fn config(kind: ConfigValidationError) -> Self {
+        RelayError::Config(kind)
     }
 
     pub fn frame(
@@ -314,10 +382,47 @@ impl RelayError {
         details: impl Into<String>,
         frame_data: Option<Vec<u8>>,
     ) -> Self {
-        RelayError::Frame {
-            kind,
-            details: details.into(),
-            frame_data,
+        let details = details.into();
+        match kind {
+            FrameErrorKind::TooShort | FrameErrorKind::TooLong => {
+                RelayError::Frame(FrameError::Size {
+                    kind: match kind {
+                        FrameErrorKind::TooShort => FrameSizeKind::TooShort,
+                        FrameErrorKind::TooLong => FrameSizeKind::TooLong,
+                        _ => unreachable!(),
+                    },
+                    details,
+                    frame_data,
+                })
+            }
+            FrameErrorKind::InvalidFormat
+            | FrameErrorKind::InvalidHeader
+            | FrameErrorKind::UnexpectedResponse => RelayError::Frame(FrameError::Format {
+                kind: match kind {
+                    FrameErrorKind::InvalidFormat => FrameFormatKind::InvalidFormat,
+                    FrameErrorKind::InvalidHeader => FrameFormatKind::InvalidHeader,
+                    FrameErrorKind::UnexpectedResponse => FrameFormatKind::UnexpectedResponse,
+                    _ => unreachable!(),
+                },
+                details,
+                frame_data,
+            }),
+            FrameErrorKind::InvalidCrc => {
+                if let Some(frame_data) = frame_data {
+                    let frame_hex = hex::encode(&frame_data);
+                    RelayError::Frame(FrameError::Crc {
+                        calculated: 0, // TODO(aljen): pass actual values
+                        received: 0,   // TODO(aljen): pass actual values
+                        frame_hex,
+                    })
+                } else {
+                    RelayError::Frame(FrameError::Format {
+                        kind: FrameFormatKind::InvalidFormat,
+                        details,
+                        frame_data: None,
+                    })
+                }
+            }
         }
     }
 
@@ -331,6 +436,72 @@ impl RelayError {
             client_addr,
             details: details.into(),
         }
+    }
+}
+
+impl ConnectionError {
+    pub fn limit_exceeded(details: impl Into<String>) -> Self {
+        ConnectionError::LimitExceeded(details.into())
+    }
+
+    pub fn timeout(details: impl Into<String>) -> Self {
+        ConnectionError::Timeout(details.into())
+    }
+
+    pub fn invalid_state(details: impl Into<String>) -> Self {
+        ConnectionError::InvalidState(details.into())
+    }
+
+    pub fn rejected(details: impl Into<String>) -> Self {
+        ConnectionError::Rejected(details.into())
+    }
+}
+
+impl ConfigValidationError {
+    pub fn tcp(details: impl Into<String>) -> Self {
+        ConfigValidationError::InvalidTcp(details.into())
+    }
+
+    pub fn rtu(details: impl Into<String>) -> Self {
+        ConfigValidationError::InvalidRtu(details.into())
+    }
+
+    pub fn timing(details: impl Into<String>) -> Self {
+        ConfigValidationError::InvalidTiming(details.into())
+    }
+
+    pub fn security(details: impl Into<String>) -> Self {
+        ConfigValidationError::InvalidSecurity(details.into())
+    }
+
+    pub fn connection(details: impl Into<String>) -> Self {
+        ConfigValidationError::InvalidConnection(details.into())
+    }
+}
+
+impl RtsError {
+    pub fn signal(details: impl Into<String>) -> Self {
+        RtsError::SignalError(details.into())
+    }
+
+    pub fn timing(details: impl Into<String>) -> Self {
+        RtsError::TimingError(details.into())
+    }
+
+    pub fn config(details: impl Into<String>) -> Self {
+        RtsError::ConfigError(details.into())
+    }
+}
+
+impl From<BackoffError> for RelayError {
+    fn from(err: BackoffError) -> Self {
+        RelayError::Connection(ConnectionError::Backoff(err))
+    }
+}
+
+impl From<RtsError> for RelayError {
+    fn from(err: RtsError) -> Self {
+        RelayError::Transport(TransportError::Rts(err))
     }
 }
 
@@ -400,6 +571,40 @@ impl From<Elapsed> for TransportError {
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    #[test]
+    fn test_connection_error_creation() {
+        let err = ConnectionError::limit_exceeded("Too many connections");
+        assert!(matches!(err, ConnectionError::LimitExceeded(_)));
+        assert_eq!(
+            err.to_string(),
+            "Connection limit exceeded: Too many connections"
+        );
+    }
+
+    #[test]
+    fn test_config_validation_error_creation() {
+        let err = ConfigValidationError::tcp("Invalid port");
+        assert!(matches!(err, ConfigValidationError::InvalidTcp(_)));
+        assert_eq!(err.to_string(), "Invalid TCP configuration: Invalid port");
+    }
+
+    #[test]
+    fn test_rts_error_creation() {
+        let err = RtsError::signal("Failed to set RTS pin");
+        assert!(matches!(err, RtsError::SignalError(_)));
+        assert_eq!(
+            err.to_string(),
+            "Failed to set RTS signal: Failed to set RTS pin"
+        );
+    }
+
+    #[test]
+    fn test_error_conversion() {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
+        let client_err = RelayError::client(ClientErrorKind::Timeout, addr, "Connection timed out");
+        assert!(matches!(client_err, RelayError::Client { .. }));
+    }
 
     #[test]
     fn test_error_creation_and_display() {

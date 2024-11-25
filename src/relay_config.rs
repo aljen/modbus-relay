@@ -3,7 +3,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-use crate::{errors::ValidationError, ConfigErrorKind};
+use crate::{errors::ConfigValidationError, RelayError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -129,7 +129,7 @@ impl std::fmt::Display for RtsType {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelayConfig {
     // TCP settings
     pub tcp_bind_addr: String,
@@ -194,78 +194,113 @@ impl Default for RelayConfig {
 }
 
 impl RelayConfig {
-    pub fn validate(&self) -> Result<(), ValidationError> {
+    pub fn validate(&self) -> Result<(), RelayError> {
         // TCP validation
         if !self.tcp_bind_addr.parse::<std::net::IpAddr>().is_ok() {
-            return Err(ValidationError {
-                kind: ConfigErrorKind::InvalidTcpAddress,
-                details: format!("Invalid TCP bind address: {}", self.tcp_bind_addr),
-            });
+            return Err(RelayError::Config(ConfigValidationError::tcp(format!(
+                "Invalid TCP bind address: {}",
+                self.tcp_bind_addr
+            ))));
         }
 
         if !(1..=65535).contains(&self.tcp_bind_port) {
-            return Err(ValidationError {
-                kind: ConfigErrorKind::InvalidTcpPort,
-                details: format!("Invalid TCP port: {}", self.tcp_bind_port),
-            });
+            return Err(RelayError::Config(ConfigValidationError::tcp(format!(
+                "Invalid TCP port: {}",
+                self.tcp_bind_port
+            ))));
         }
 
         // Serial port validation
         if self.rtu_baud_rate == 0 || self.rtu_baud_rate > 921600 {
-            return Err(ValidationError {
-                kind: ConfigErrorKind::InvalidBaudRate,
-                details: format!("Invalid baud rate: {}", self.rtu_baud_rate),
-            });
+            return Err(RelayError::Config(ConfigValidationError::rtu(format!(
+                "Invalid baud rate: {}",
+                self.rtu_baud_rate
+            ))));
         }
 
         // Timeout validation
         if self.transaction_timeout.as_millis() == 0 {
-            return Err(ValidationError {
-                kind: ConfigErrorKind::InvalidTimeout,
-                details: "Transaction timeout cannot be 0".to_string(),
-            });
+            return Err(RelayError::Config(ConfigValidationError::timing(
+                "Transaction timeout cannot be 0".to_string(),
+            )));
         }
 
         if self.serial_timeout.as_millis() == 0 {
-            return Err(ValidationError {
-                kind: ConfigErrorKind::InvalidTimeout,
-                details: "Serial timeout cannot be 0".to_string(),
-            });
+            return Err(RelayError::Config(ConfigValidationError::timing(
+                "Serial timeout cannot be 0".to_string(),
+            )));
         }
 
         // RTS validation
         #[cfg(feature = "rts")]
         if self.rtu_rts_type != RtsType::None {
             if self.rtu_rts_delay_us > 10000 {
-                return Err(ValidationError {
-                    kind: ConfigErrorKind::InvalidRtsSettings,
-                    details: format!("RTS delay too large: {}µs", self.rtu_rts_delay_us),
-                });
+                return Err(RelayError::Config(ConfigValidationError::rtu(format!(
+                    "RTS delay too large: {}µs",
+                    self.rtu_rts_delay_us
+                ))));
             }
         }
 
         // Buffer validation
         if self.max_frame_size < 8 {
-            return Err(ValidationError {
-                kind: ConfigErrorKind::InvalidFrameSize,
-                details: format!(
-                    "Frame size too small: {} bytes (min 8)",
-                    self.max_frame_size
-                ),
-            });
+            return Err(RelayError::Config(ConfigValidationError::rtu(format!(
+                "Frame size too small: {} bytes (min 8)",
+                self.max_frame_size
+            ))));
         }
 
         if self.max_frame_size > 256 {
-            return Err(ValidationError {
-                kind: ConfigErrorKind::InvalidFrameSize,
-                details: format!(
-                    "Frame size too large: {} bytes (max 256)",
-                    self.max_frame_size
-                ),
-            });
+            return Err(RelayError::Config(ConfigValidationError::rtu(format!(
+                "Frame size too large: {} bytes (max 256)",
+                self.max_frame_size
+            ))));
+        }
+
+        // Validate that transaction timeout is greater than serial timeout
+        if self.transaction_timeout <= self.serial_timeout {
+            return Err(RelayError::Config(ConfigValidationError::timing(format!(
+                "Transaction timeout ({:?}) must be greater than serial timeout ({:?})",
+                self.transaction_timeout, self.serial_timeout
+            ))));
         }
 
         Ok(())
+    }
+
+    pub fn from_env() -> Result<Self, RelayError> {
+        let config = Self {
+            tcp_bind_addr: std::env::var("MODBUS_TCP_BIND_ADDR")
+                .unwrap_or_else(|_| "0.0.0.0".to_string()),
+            tcp_bind_port: std::env::var("MODBUS_TCP_BIND_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(5000),
+            rtu_device: std::env::var("MODBUS_RTU_DEVICE")
+                .unwrap_or_else(|_| "/dev/ttyAMA0".to_string()),
+            rtu_baud_rate: std::env::var("MODBUS_RTU_BAUD_RATE")
+                .ok()
+                .and_then(|b| b.parse().ok())
+                .unwrap_or(9600),
+            data_bits: DataBits::default(),
+            parity: Parity::None,
+            stop_bits: StopBits::One,
+            #[cfg(feature = "rts")]
+            rtu_rts_type: RtsType::Up,
+            #[cfg(feature = "rts")]
+            rtu_rts_delay_us: std::env::var("MODBUS_RTS_DELAY_US")
+                .ok()
+                .and_then(|d| d.parse().ok())
+                .unwrap_or(3500),
+            rtu_flush_after_write: true,
+            transaction_timeout: Duration::from_secs(1),
+            serial_timeout: Duration::from_millis(500),
+            max_frame_size: 256,
+            trace_frames: false,
+        };
+
+        config.validate()?;
+        Ok(config)
     }
 
     #[cfg(feature = "rts")]
@@ -312,5 +347,90 @@ mod duration_millis {
     {
         let millis = u64::deserialize(deserializer)?;
         Ok(Duration::from_millis(millis))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_valid_config() {
+        let config = RelayConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_invalid_tcp_address() {
+        let mut config = RelayConfig::default();
+        config.tcp_bind_addr = "invalid".to_string();
+        assert!(matches!(
+            config.validate(),
+            Err(RelayError::Config(ConfigValidationError::InvalidTcp(_)))
+        ));
+    }
+
+    #[test]
+    fn test_invalid_tcp_port() {
+        let mut config = RelayConfig::default();
+        config.tcp_bind_port = 0;
+        assert!(matches!(
+            config.validate(),
+            Err(RelayError::Config(ConfigValidationError::InvalidTcp(_)))
+        ));
+    }
+
+    #[test]
+    fn test_invalid_baud_rate() {
+        let mut config = RelayConfig::default();
+        config.rtu_baud_rate = 0;
+        assert!(matches!(
+            config.validate(),
+            Err(RelayError::Config(ConfigValidationError::InvalidRtu(_)))
+        ));
+    }
+
+    #[test]
+    fn test_invalid_timeouts() {
+        let mut config = RelayConfig::default();
+        config.transaction_timeout = Duration::from_secs(0);
+        assert!(matches!(
+            config.validate(),
+            Err(RelayError::Config(ConfigValidationError::InvalidTiming(_)))
+        ));
+
+        config.transaction_timeout = Duration::from_secs(1);
+        config.serial_timeout = Duration::from_secs(2);
+        assert!(matches!(
+            config.validate(),
+            Err(RelayError::Config(ConfigValidationError::InvalidTiming(_)))
+        ));
+    }
+
+    #[test]
+    fn test_invalid_frame_size() {
+        let mut config = RelayConfig::default();
+        config.max_frame_size = 4;
+        assert!(matches!(
+            config.validate(),
+            Err(RelayError::Config(ConfigValidationError::InvalidRtu(_)))
+        ));
+
+        config.max_frame_size = 300;
+        assert!(matches!(
+            config.validate(),
+            Err(RelayError::Config(ConfigValidationError::InvalidRtu(_)))
+        ));
+    }
+
+    #[test]
+    fn test_config_from_env() {
+        std::env::set_var("MODBUS_TCP_BIND_PORT", "8080");
+        std::env::set_var("MODBUS_RTU_BAUD_RATE", "19200");
+
+        let config = RelayConfig::from_env().unwrap();
+        assert_eq!(config.tcp_bind_port, 8080);
+        assert_eq!(config.rtu_baud_rate, 19200);
     }
 }

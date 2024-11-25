@@ -1,6 +1,6 @@
 use clap::{Args, Parser};
 use std::{path::PathBuf, sync::Arc};
-use tracing::{info, Level};
+use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use modbus_relay::{ModbusRelay, RelayConfig};
@@ -51,12 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("Loading config from {}", cli.common.config.display());
         let content = std::fs::read_to_string(&cli.common.config)?;
         let config: RelayConfig = serde_json::from_str(&content)?;
-        config
-            .validate()
-            .map_err(|err| modbus_relay::RelayError::Config {
-                kind: err.kind,
-                details: err.details,
-            })?;
+        config.validate()?;
         config
     } else {
         info!("Config file not found, using defaults");
@@ -69,6 +64,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create and run relay
     let relay = Arc::new(ModbusRelay::new(config)?);
+    let relay_clone = Arc::clone(&relay);
+
+    // Handle shutdown signals
+    tokio::spawn(async move {
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to create SIGTERM signal handler");
+        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+            .expect("Failed to create SIGINT signal handler");
+
+        tokio::select! {
+            _ = sigterm.recv() => info!("Received SIGTERM"),
+            _ = sigint.recv() => info!("Received SIGINT"),
+        }
+
+        info!("Starting graceful shutdown");
+        if let Err(e) = relay_clone.shutdown().await {
+            error!("Error during shutdown: {}", e);
+        }
+    });
+
     relay.run().await?;
 
     Ok(())

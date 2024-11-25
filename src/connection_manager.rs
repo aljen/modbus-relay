@@ -5,7 +5,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore};
 
-use crate::{ClientErrorKind, RelayError};
+use crate::errors::ConnectionError;
+use crate::{ConfigValidationError, RelayError};
 
 /// Configuration for managing connections
 #[derive(Debug, Clone)]
@@ -80,6 +81,44 @@ pub struct ConnectionManager {
     total_connections: Arc<AtomicU64>,
 }
 
+impl ConnectionConfig {
+    pub fn validate(&self) -> Result<(), ConfigValidationError> {
+        if self.max_connections == 0 {
+            return Err(ConfigValidationError::connection(
+                "max_connections cannot be 0".to_string(),
+            ));
+        }
+
+        if let Some(limit) = self.per_ip_limits {
+            if limit == 0 {
+                return Err(ConfigValidationError::connection(
+                    "per_ip_limits cannot be 0".to_string(),
+                ));
+            }
+            if limit > self.max_connections {
+                return Err(ConfigValidationError::connection(format!(
+                    "per_ip_limits ({}) cannot be greater than max_connections ({})",
+                    limit, self.max_connections
+                )));
+            }
+        }
+
+        if self.idle_timeout.as_secs() == 0 {
+            return Err(ConfigValidationError::connection(
+                "idle_timeout cannot be 0".to_string(),
+            ));
+        }
+
+        if self.connect_timeout.as_secs() == 0 {
+            return Err(ConfigValidationError::connection(
+                "connect_timeout cannot be 0".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
 impl ConnectionManager {
     pub fn new(config: ConnectionConfig) -> Self {
         Self {
@@ -103,11 +142,9 @@ impl ConnectionManager {
             .acquire_owned()
             .await
             .map_err(|_| {
-                RelayError::client(
-                    ClientErrorKind::TooManyConnections,
-                    addr,
+                RelayError::Connection(ConnectionError::limit_exceeded(
                     "Global connection limit reached",
-                )
+                ))
             })?;
 
         // Check per IP limit if enabled
@@ -118,11 +155,10 @@ impl ConnectionManager {
                 .or_insert_with(|| Arc::new(Semaphore::new(per_ip_limit)));
 
             let _ = semaphore.try_acquire().map_err(|_| {
-                RelayError::client(
-                    ClientErrorKind::TooManyConnections,
-                    addr,
-                    format!("Per-IP limit ({}) reached", per_ip_limit),
-                )
+                RelayError::Connection(ConnectionError::limit_exceeded(format!(
+                    "Per-IP limit ({}) reached for {}",
+                    per_ip_limit, addr
+                )))
             })?;
         }
 
@@ -137,6 +173,13 @@ impl ConnectionManager {
                 last_error: None,
             });
 
+            // Check for potential overflow
+            if client_stats.active_connections == usize::MAX {
+                return Err(RelayError::Connection(ConnectionError::invalid_state(
+                    "Active connections counter overflow".to_string(),
+                )));
+            }
+
             client_stats.active_connections += 1;
             client_stats.last_active = Instant::now();
         }
@@ -148,6 +191,22 @@ impl ConnectionManager {
             addr,
             _global_permit: global_permit,
         })
+    }
+
+    pub async fn record_client_error(&self, addr: &SocketAddr) -> Result<(), RelayError> {
+        let mut stats = self.stats.lock().await;
+        let client_stats = stats.entry(*addr).or_insert_with(|| ClientStats {
+            active_connections: 0,
+            last_active: Instant::now(),
+            total_requests: 0,
+            error_count: 0,
+            last_error: None,
+        });
+
+        client_stats.error_count += 1;
+        client_stats.last_error = Some(Instant::now());
+
+        Ok(())
     }
 
     /// Updates statistics for a given connection
@@ -164,24 +223,71 @@ impl ConnectionManager {
     }
 
     /// Cleans up idle connections
-    pub async fn cleanup_idle_connections(&self) {
+    pub async fn cleanup_idle_connections(&self) -> Result<(), RelayError> {
         let now = Instant::now();
         let mut stats = self.stats.lock().await;
-        stats.retain(|_, s| now.duration_since(s.last_active) < self.config.idle_timeout);
+        let mut cleanup_errors = Vec::new();
+
+        stats.retain(|addr, s| {
+            if now.duration_since(s.last_active) >= self.config.idle_timeout {
+                if s.active_connections > 0 {
+                    cleanup_errors.push(format!(
+                        "Forced cleanup of {} active connections for {}",
+                        s.active_connections, addr
+                    ));
+                }
+                false
+            } else {
+                true
+            }
+        });
+
+        if !cleanup_errors.is_empty() {
+            return Err(RelayError::Connection(ConnectionError::invalid_state(
+                format!("Cleanup encountered issues: {}", cleanup_errors.join(", ")),
+            )));
+        }
+
+        Ok(())
     }
 
     /// Returns connection statistics
-    pub async fn get_stats(&self) -> ConnectionStats {
+    pub async fn get_stats(&self) -> Result<ConnectionStats, RelayError> {
         let stats = self.stats.lock().await;
-        let mut total_active = 0;
-        let mut total_requests = 0;
-        let mut total_errors = 0;
+        let mut total_active: usize = 0;
+        let mut total_requests: u64 = 0;
+        let mut total_errors: u64 = 0;
         let mut per_ip_stats = HashMap::new();
 
         for (addr, client_stats) in stats.iter() {
+            // Check for counter overflow
+            if total_active
+                .checked_add(client_stats.active_connections)
+                .is_none()
+            {
+                return Err(RelayError::Connection(ConnectionError::invalid_state(
+                    "Total active connections counter overflow".to_string(),
+                )));
+            }
             total_active += client_stats.active_connections;
+
+            if total_requests
+                .checked_add(client_stats.total_requests)
+                .is_none()
+            {
+                return Err(RelayError::Connection(ConnectionError::invalid_state(
+                    "Total requests counter overflow".to_string(),
+                )));
+            }
             total_requests += client_stats.total_requests;
+
+            if total_errors.checked_add(client_stats.error_count).is_none() {
+                return Err(RelayError::Connection(ConnectionError::invalid_state(
+                    "Total errors counter overflow".to_string(),
+                )));
+            }
             total_errors += client_stats.error_count;
+
             per_ip_stats.insert(
                 *addr,
                 IpStats {
@@ -194,13 +300,13 @@ impl ConnectionManager {
             );
         }
 
-        ConnectionStats {
+        Ok(ConnectionStats {
             total_connections: self.total_connections.load(Ordering::Relaxed),
             active_connections: total_active,
             total_requests,
             total_errors,
             per_ip_stats,
-        }
+        })
     }
 }
 
@@ -284,6 +390,10 @@ impl BackoffStrategy {
 // Testy
 #[cfg(test)]
 mod tests {
+    use tokio::time::sleep;
+
+    use crate::ProtocolErrorKind;
+
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
 
@@ -317,6 +427,96 @@ mod tests {
         // Third connection should fail (global limit)
         let conn4 = manager.accept_connection(addr2).await;
         assert!(conn4.is_err(), "Expected global connection limit error");
+    }
+
+    #[tokio::test]
+    async fn test_error_recording() {
+        let manager = Arc::new(ConnectionManager::new(ConnectionConfig::default()));
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 1234);
+
+        // Record some errors
+        let error = RelayError::protocol(ProtocolErrorKind::InvalidFunction, "Test error");
+        assert!(manager.record_client_error(&addr, &error).await.is_ok());
+
+        // Verify error was recorded
+        let stats = manager.get_stats().await.unwrap();
+        assert_eq!(stats.total_errors, 1);
+        assert!(stats.per_ip_stats.get(&addr).unwrap().error_count == 1);
+    }
+
+    #[tokio::test]
+    async fn test_idle_connection_cleanup() {
+        let config = ConnectionConfig {
+            idle_timeout: Duration::from_millis(100),
+            ..Default::default()
+        };
+
+        let manager = Arc::new(ConnectionManager::new(config));
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 1234);
+
+        // Create a connection
+        let _conn = manager.accept_connection(addr).await.unwrap();
+
+        // Verify connection is active
+        let stats = manager.get_stats().await.unwrap();
+        assert_eq!(stats.active_connections, 1);
+
+        // Wait for connection to become idle
+        sleep(Duration::from_millis(200)).await;
+
+        // Cleanup should work
+        assert!(manager.cleanup_idle_connections().await.is_ok());
+
+        // Verify connection was cleaned up
+        let stats = manager.get_stats().await.unwrap();
+        assert_eq!(stats.active_connections, 0);
+    }
+
+    #[tokio::test]
+    async fn test_stats_counter_overflow() {
+        let manager = Arc::new(ConnectionManager::new(ConnectionConfig::default()));
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 1234);
+
+        // Manually set counters to near max to test overflow protection
+        {
+            let mut stats = manager.stats.lock().await;
+            let client_stats = stats.entry(addr).or_insert_with(|| ClientStats {
+                active_connections: usize::MAX - 1,
+                last_active: Instant::now(),
+                total_requests: u64::MAX - 1,
+                error_count: u64::MAX - 1,
+                last_error: None,
+            });
+            client_stats.active_connections = usize::MAX - 1;
+        }
+
+        // Attempting to increment should result in error
+        let result = manager.accept_connection(addr).await;
+        assert!(matches!(
+            result.unwrap_err(),
+            RelayError::Connection(ConnectionError::InvalidState(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_connection_guard_cleanup() {
+        let manager = Arc::new(ConnectionManager::new(ConnectionConfig::default()));
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 1234);
+
+        {
+            let guard = manager.accept_connection(addr).await.unwrap();
+            let stats = manager.get_stats().await.unwrap();
+            assert_eq!(stats.active_connections, 1);
+
+            // Guard should clean up when dropped
+            drop(guard);
+        }
+
+        // Wait a bit for async cleanup
+        sleep(Duration::from_millis(50)).await;
+
+        let stats = manager.get_stats().await.unwrap();
+        assert_eq!(stats.active_connections, 0);
     }
 
     #[tokio::test]
