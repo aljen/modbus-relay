@@ -2,7 +2,6 @@ use thiserror::Error;
 
 use super::BackoffError;
 
-
 #[derive(Error, Debug)]
 pub enum ConnectionError {
     #[error("Connection limit exceeded: {0}")]
@@ -23,7 +22,6 @@ pub enum ConnectionError {
     #[error("Backoff error: {0}")]
     Backoff(#[from] BackoffError),
 }
-
 
 impl ConnectionError {
     pub fn limit_exceeded(details: impl Into<String>) -> Self {

@@ -10,15 +10,15 @@ use tokio::{
 use tracing::{debug, error, info};
 
 use crate::{
+    config::Config as RelayConfig,
     connection_manager::{ConnectionConfig, ConnectionManager},
     errors::{
         ClientErrorKind, ConfigValidationError, ConnectionError, FrameErrorKind, ProtocolErrorKind,
         RelayError,
     },
-    utils::generate_request_id,
     http_api::start_http_server,
-    config::Config as RelayConfig,
     rtu_transport::RtuTransport,
+    utils::generate_request_id,
     IoOperation, ModbusProcessor, TransportError,
 };
 
@@ -36,7 +36,7 @@ impl ModbusRelay {
         // Validate the config first
         RelayConfig::validate(&config)?;
 
-        let transport = RtuTransport::new(&config)?;
+        let transport = RtuTransport::new(&config.rtu, config.logging.trace_frames)?;
 
         let conn_config = ConnectionConfig::default(); // TODO: Add to RelayConfig
         conn_config
@@ -183,12 +183,9 @@ impl ModbusRelay {
 
         let mut shutdown_rx = self.main_shutdown.subscribe();
 
-        loop {
-            tokio::select! {
-                _ = shutdown_rx.changed() => {
-                    info!("Main loop received shutdown signal");
-                    break;
-                }
+        tokio::select! {
+            _ = shutdown_rx.changed() => {
+                info!("Main loop received shutdown signal");
             }
         }
 

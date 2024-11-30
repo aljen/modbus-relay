@@ -11,7 +11,6 @@ rtu:
   # Lower baud rate for testing
   baud_rate: 9600
 
-connection:
   # Longer timeouts for debugging
   transaction_timeout: "10s"
   serial_timeout: "2s"

@@ -25,5 +25,3 @@ pub enum FrameError {
         frame_hex: String,
     },
 }
-
-

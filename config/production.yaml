@@ -14,7 +14,6 @@ rtu:
   rts_type: "down"
   rts_delay_us: 3500
 
-connection:
   # Shorter timeouts in production
   transaction_timeout: "3s"
   serial_timeout: "500ms"

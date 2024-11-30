@@ -7,10 +7,9 @@ pub mod modbus_relay;
 pub mod rtu_transport;
 mod utils;
 
-pub use config::{Config as RelayConfig, RtuConfig, TcpConfig, HttpConfig, ConnectionConfig, LoggingConfig};
-pub use config::{DataBits, Parity, StopBits};
-#[cfg(feature = "rts")]
 pub use config::RtsType;
+pub use config::{Config as RelayConfig, HttpConfig, LoggingConfig, RtuConfig, TcpConfig};
+pub use config::{DataBits, Parity, StopBits};
 pub use errors::{
     BackoffError, ClientErrorKind, ConfigValidationError, ConnectionError, FrameErrorKind,
     IoOperation, ProtocolErrorKind, RelayError, RtsError, SerialErrorKind, TransportError,

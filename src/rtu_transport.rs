@@ -3,8 +3,9 @@ use std::time::{Duration, Instant};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::os::unix::io::AsRawFd;
 
-#[cfg(feature = "rts")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use libc::{TIOCMGET, TIOCMSET, TIOCM_RTS};
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use serialport::TTYPort;
 
@@ -12,36 +13,37 @@ use serialport::SerialPort;
 use tokio::sync::Mutex;
 use tracing::{info, trace};
 
-#[cfg(feature = "rts")]
-use crate::RtsError;
+use crate::{RtsError, RtsType};
+
 use crate::{
-    guess_response_size, FrameErrorKind, IoOperation, RelayConfig, RelayError, TransportError,
+    guess_response_size, FrameErrorKind, IoOperation, RelayError, RtuConfig, TransportError,
 };
 
 pub struct RtuTransport {
     port: Mutex<Box<dyn SerialPort>>,
-    config: RelayConfig,
+    config: RtuConfig,
+    trace_frames: bool,
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     raw_fd: i32,
 }
 
 impl RtuTransport {
-    pub fn new(config: &RelayConfig) -> Result<Self, TransportError> {
-        info!("Opening serial port {}", config.rtu.serial_port_info());
+    pub fn new(config: &RtuConfig, trace_frames: bool) -> Result<Self, TransportError> {
+        info!("Opening serial port {}", config.serial_port_info());
 
         // Explicite otwieramy jako TTYPort na Unixie
         #[cfg(any(target_os = "linux", target_os = "macos"))]
-        let tty_port: TTYPort = serialport::new(&config.rtu.device, config.rtu.baud_rate)
-            .data_bits(config.rtu.data_bits.into())
-            .parity(config.rtu.parity.into())
-            .stop_bits(config.rtu.stop_bits.into())
-            .timeout(config.connection.serial_timeout)
+        let tty_port: TTYPort = serialport::new(&config.device, config.baud_rate)
+            .data_bits(config.data_bits.into())
+            .parity(config.parity.into())
+            .stop_bits(config.stop_bits.into())
+            .timeout(config.serial_timeout)
             .flow_control(serialport::FlowControl::None)
             .open_native()
             .map_err(|e| TransportError::Io {
                 operation: IoOperation::Configure,
-                details: format!("serial port {}", config.rtu.device),
+                details: format!("serial port {}", config.device),
                 source: std::io::Error::new(std::io::ErrorKind::Other, e.description),
             })?;
 
@@ -68,6 +70,7 @@ impl RtuTransport {
         Ok(Self {
             port: Mutex::new(port),
             config: config.clone(),
+            trace_frames,
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             raw_fd,
         })
@@ -96,12 +99,11 @@ impl RtuTransport {
         Ok(())
     }
 
-    #[cfg(feature = "rts")]
     fn set_rts(&self, on: bool) -> Result<(), TransportError> {
         let rts_span = tracing::info_span!(
             "rts_control",
             signal = if on { "HIGH" } else { "LOW" },
-            delay_us = self.config.rtu.rts_delay_us,
+            delay_us = self.config.rts_delay_us,
         );
         let _enter = rts_span.enter();
 
@@ -163,7 +165,7 @@ impl RtuTransport {
         request: &[u8],
         response: &mut [u8],
     ) -> Result<usize, RelayError> {
-        if request.len() > self.config.connection.max_frame_size {
+        if request.len() > self.config.max_frame_size {
             return Err(RelayError::frame(
                 FrameErrorKind::TooLong,
                 format!("Request frame too long: {} bytes", request.len()),
@@ -171,8 +173,8 @@ impl RtuTransport {
             ));
         }
 
-        if self.config.logging.trace_frames {
-            info!("TX: {} bytes: {:02X?}", request.len(), request);
+        if self.trace_frames {
+            trace!("TX: {} bytes: {:02X?}", request.len(), request);
         }
 
         let function = request.get(1).ok_or_else(|| {
@@ -209,17 +211,16 @@ impl RtuTransport {
 
         let transaction_start = Instant::now();
 
-        let result = tokio::time::timeout(self.config.connection.transaction_timeout, async {
+        let result = tokio::time::timeout(self.config.transaction_timeout, async {
             let mut port = self.port.lock().await;
 
-            #[cfg(feature = "rts")]
-            {
+            if self.config.rts_type != RtsType::None {
                 info!("RTS -> TX mode");
-                self.set_rts(self.config.rtu.rts_type.to_signal_level(true))?;
+                self.set_rts(self.config.rts_type.to_signal_level(true))?;
 
-                if self.config.rtu.rts_delay_us > 0 {
+                if self.config.rts_delay_us > 0 {
                     info!("RTS -> TX mode [waiting]");
-                    tokio::time::sleep(Duration::from_micros(self.config.rtu.rts_delay_us)).await;
+                    tokio::time::sleep(Duration::from_micros(self.config.rts_delay_us)).await;
                 }
             }
 
@@ -237,21 +238,19 @@ impl RtuTransport {
                 source: e,
             })?;
 
-            #[cfg(feature = "rts")]
-            {
+            if self.config.rts_type != RtsType::None {
                 info!("RTS -> RX mode");
-                self.set_rts(self.config.rtu.rts_type.to_signal_level(false))?;
+                self.set_rts(self.config.rts_type.to_signal_level(false))?;
             }
 
-            if self.config.rtu.flush_after_write {
+            if self.config.flush_after_write {
                 info!("RTS -> TX mode [flushing]");
                 self.tc_flush()?;
             }
 
-            #[cfg(feature = "rts")]
-            if self.config.rtu.rts_delay_us > 0 {
+            if self.config.rts_type != RtsType::None && self.config.rts_delay_us > 0 {
                 info!("RTS -> RX mode [waiting]");
-                tokio::time::sleep(Duration::from_micros(self.config.rtu.rts_delay_us)).await;
+                tokio::time::sleep(Duration::from_micros(self.config.rts_delay_us)).await;
             }
 
             // Read response
@@ -343,8 +342,8 @@ impl RtuTransport {
                 });
             }
 
-            if self.config.logging.trace_frames && total_bytes > 0 {
-                info!(
+            if self.trace_frames {
+                trace!(
                     "RX: {} bytes: {:02X?}",
                     total_bytes,
                     &response[..total_bytes],
@@ -356,7 +355,7 @@ impl RtuTransport {
         .await
         .map_err(|elapsed| TransportError::Timeout {
             elapsed: transaction_start.elapsed(),
-            limit: self.config.connection.transaction_timeout,
+            limit: self.config.transaction_timeout,
             source: elapsed,
         })?;
 

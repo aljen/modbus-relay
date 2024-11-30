@@ -67,10 +67,6 @@ strip = true      # Remove debug symbols
 opt-level = 0 # No optimizations for faster compilation
 debug = true  # Full debug info
 
-[features]
-default = []
-rts = []
-
 # TODO:
 # debug-logging - includes debug logging
 # metrics - includes metrics for Prometheus

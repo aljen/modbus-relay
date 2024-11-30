@@ -1,15 +1,13 @@
-mod tcp;
-mod rtu;
-mod connection;
 mod http;
 mod logging;
+mod rtu;
+mod tcp;
 mod types;
 
-pub use tcp::Config as TcpConfig;
-pub use rtu::Config as RtuConfig;
-pub use connection::Config as ConnectionConfig;
 pub use http::Config as HttpConfig;
 pub use logging::Config as LoggingConfig;
+pub use rtu::Config as RtuConfig;
+pub use tcp::Config as TcpConfig;
 pub use types::*;
 
 use std::path::PathBuf;
@@ -19,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use config::{Config as ConfigBuilder, ConfigError, Environment, File, FileFormat};
 
 /// Main application configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// TCP server configuration
     #[serde(default)]
@@ -29,10 +27,6 @@ pub struct Config {
     #[serde(default)]
     pub rtu: RtuConfig,
 
-    /// Connection management configuration
-    #[serde(default)]
-    pub connection: ConnectionConfig,
-
     /// HTTP API configuration
     #[serde(default)]
     pub http: HttpConfig,
@@ -40,18 +34,6 @@ pub struct Config {
     /// Logging configuration
     #[serde(default)]
     pub logging: LoggingConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            tcp: TcpConfig::default(),
-            rtu: RtuConfig::default(),
-            connection: ConnectionConfig::default(),
-            http: HttpConfig::default(),
-            logging: LoggingConfig::default(),
-        }
-    }
 }
 
 impl Config {
@@ -80,7 +62,6 @@ impl Config {
             // TCP configuration
             .set_default("tcp.bind_addr", defaults.tcp.bind_addr)?
             .set_default("tcp.bind_port", defaults.tcp.bind_port)?
-            
             // RTU configuration
             .set_default("rtu.device", defaults.rtu.device)?
             .set_default("rtu.baud_rate", defaults.rtu.baud_rate)?
@@ -88,28 +69,27 @@ impl Config {
             .set_default("rtu.parity", defaults.rtu.parity.to_string())?
             .set_default("rtu.stop_bits", defaults.rtu.stop_bits.to_string())?
             .set_default("rtu.flush_after_write", defaults.rtu.flush_after_write)?
-            
-            // Connection configuration
             .set_default(
-                "connection.transaction_timeout",
-                format!("{}s", defaults.connection.transaction_timeout.as_secs()),
+                "rtu.transaction_timeout",
+                format!("{}s", defaults.rtu.transaction_timeout.as_secs()),
             )?
             .set_default(
-                "connection.serial_timeout",
-                format!("{}s", defaults.connection.serial_timeout.as_secs()),
+                "rtu.serial_timeout",
+                format!("{}s", defaults.rtu.serial_timeout.as_secs()),
             )?
-            .set_default("connection.max_frame_size", defaults.connection.max_frame_size as i64)?
-            
+            .set_default("rtu.max_frame_size", defaults.rtu.max_frame_size as i64)?
             // HTTP configuration
             .set_default("http.enabled", defaults.http.enabled)?
             .set_default("http.port", defaults.http.port)?
             .set_default("http.metrics_enabled", defaults.http.metrics_enabled)?
-            
             // Logging configuration
             .set_default("logging.trace_frames", defaults.logging.trace_frames)?
             .set_default("logging.log_level", defaults.logging.log_level)?
             .set_default("logging.format", defaults.logging.format)?
-            .set_default("logging.include_location", defaults.logging.include_location)?;
+            .set_default(
+                "logging.include_location",
+                defaults.logging.include_location,
+            )?;
 
         let config = builder
             // Load default config file
@@ -187,13 +167,13 @@ impl Config {
         }
 
         // Validate connection configuration
-        if config.connection.transaction_timeout.is_zero() {
+        if config.rtu.transaction_timeout.is_zero() {
             return Err(validation_error("Transaction timeout must be non-zero"));
         }
-        if config.connection.serial_timeout.is_zero() {
+        if config.rtu.serial_timeout.is_zero() {
             return Err(validation_error("Serial timeout must be non-zero"));
         }
-        if config.connection.max_frame_size == 0 {
+        if config.rtu.max_frame_size == 0 {
             return Err(validation_error("Max frame size must be non-zero"));
         }
 

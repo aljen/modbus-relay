@@ -3,11 +3,11 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
 use tokio::sync::{Mutex, Semaphore};
 use tracing::info;
 
-use crate::errors::ConnectionError;
-use crate::{ConfigValidationError, RelayError};
+use crate::{ConfigValidationError, ConnectionError, RelayError};
 
 /// Configuration for managing connections
 #[derive(Debug, Clone)]
