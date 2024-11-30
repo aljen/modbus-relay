@@ -114,7 +114,9 @@ jobs:
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm git rust cargo systemd pkg-config
+          pacman -S --noconfirm git rustup cargo systemd pkg-config
+          rustup default stable
+          rustup target add ${{ matrix.target }}
 
       - name: Cache cargo
         uses: actions/cache@v3
