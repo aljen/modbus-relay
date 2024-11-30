@@ -1,0 +1,17 @@
+[Unit]
+Description=Modbus TCP to RTU relay service
+After=network.target
+Documentation=https://github.com/aljen/modbus-relay
+
+[Service]
+Type=simple
+User=modbus-relay
+Group=dialout
+ExecStart=/usr/bin/modbus-relay --config /etc/modbus-relay/config.yaml
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

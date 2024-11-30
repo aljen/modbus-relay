@@ -1,0 +1,34 @@
+# Maintainer: Artur Wyszyński <artur.wyszynski@wildpixelgames.com>
+pkgname=modbus-relay
+pkgver=2024.11.0
+pkgrel=1
+pkgdesc="High-performance Modbus TCP to RTU relay"
+arch=('x86_64' 'aarch64' 'armv7h')
+url="https://github.com/aljen/modbus-relay"
+license=('MIT' 'Apache')
+depends=('gcc-libs')
+makedepends=('cargo' 'git')
+backup=('etc/modbus-relay/config.yaml')
+
+build() {
+  cd "$srcdir/$pkgname"
+  cargo build --release
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+  
+  # Binary
+  install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
+  
+  # Config
+  install -Dm644 "config/config.example.yaml" "$pkgdir/etc/$pkgname/config.yaml"
+  
+  # Systemd service
+  install -Dm644 "dist/arch/modbus-relay.service" "$pkgdir/usr/lib/systemd/system/$pkgname.service"
+  
+  # Documentation
+  install -Dm644 "README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 "LICENSE-MIT" "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+  install -Dm644 "LICENSE-APACHE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+}

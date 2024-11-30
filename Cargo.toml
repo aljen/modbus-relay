@@ -90,3 +90,42 @@ sign-tag = true
 pre-release-commit-message = "chore: release {{version}}"
 tag-message = "release: {{version}}"
 tag-name = "v{{version}}"
+
+[package.metadata.deb]
+maintainer = "Artur Wyszyński <artur.wyszynski@wildpixelgames.com>"
+copyright = "2024, Artur Wyszyński <artur.wyszynski@wildpixelgames.com>"
+license-file = [
+  ["LICENSE-MIT", "0"],
+  ["LICENSE-APACHE", "0"],
+]
+extended-description = """
+High-performance Modbus TCP to RTU relay service.
+Supports various temperature sensors and provides efficient data relay capabilities.
+"""
+depends = "$auto"
+section = "net"
+priority = "optional"
+assets = [
+  [
+    "target/release/modbus-relay",
+    "usr/bin/",
+    "755",
+  ],
+  [
+    "README.md",
+    "usr/share/doc/modbus-relay/README",
+    "644",
+  ],
+  [
+    "config/config.yaml",
+    "etc/modbus-relay/config.yaml",
+    "644",
+  ],
+  [
+    "dist/debian/package/modbus-relay.service",
+    "lib/systemd/system/modbus-relay.service",
+    "644",
+  ],
+]
+conf-files = ["/etc/modbus-relay/config.yaml"]
+systemd-units = { unit-name = "modbus-relay" }
