@@ -78,7 +78,7 @@ impl ModbusRelay {
                     })
                 })?;
 
-                info!("TCP server listening on {}", addr);
+                info!("MODBUS TCP server listening on {}", addr);
 
                 loop {
                     tokio::select! {
