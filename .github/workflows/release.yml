@@ -67,7 +67,7 @@ jobs:
         uses: taiki-e/install-action@cross
         
       - name: Install cargo-deb
-        uses: taiki-e/install-action@cargo-deb
+        uses: taiki-e/install-action@cargo-deb-v1
 
       - name: Build
         run: |
