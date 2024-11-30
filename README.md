@@ -6,7 +6,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/modbus-relay.svg)](https://crates.io/crates/modbus-relay)
 [![Documentation](https://docs.rs/modbus-relay/badge.svg)](https://docs.rs/modbus-relay)
-[![License:MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 [![Build Status](https://github.com/aljen/modbus-relay/workflows/CI/badge.svg)](https://github.com/aljen/modbus-relay/actions)
 
 [Features](#features) •
@@ -152,4 +152,9 @@ Contributions are welcome! Please check out our:
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under either of
+
+ * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+ * MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
