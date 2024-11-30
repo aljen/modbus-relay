@@ -9,7 +9,7 @@ repository = "https://github.com/aljen/modbus-relay"
 documentation = "https://docs.rs/modbus-relay"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
-rust-version = "1.70"
+rust-version = "1.83"
 keywords = ["hardware", "modbus", "client", "server", "relay"]
 categories = ["embedded", "hardware-support", "network-programming"]
 
