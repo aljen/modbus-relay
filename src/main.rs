@@ -99,7 +99,9 @@ pub fn setup_logging(config: Option<&RelayConfig>) -> Result<(), RelayError> {
 async fn main() {
     if let Err(e) = run().await {
         error!("Fatal error: {:#}", e);
-        if let Some(RelayError::Transport(TransportError::Io { details, .. })) = e.downcast_ref::<RelayError>() {
+        if let Some(RelayError::Transport(TransportError::Io { details, .. })) =
+            e.downcast_ref::<RelayError>()
+        {
             if details.contains("serial port") {
                 error!("Hint: Make sure the configured serial port exists and you have permission to access it");
                 #[cfg(target_os = "macos")]

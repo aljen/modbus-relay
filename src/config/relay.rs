@@ -77,7 +77,7 @@ impl Config {
             // HTTP configuration
             .set_default("http.enabled", defaults.http.enabled)?
             .set_default("http.bind_addr", defaults.http.bind_addr)?
-            .set_default("http.port", defaults.http.bind_port)?
+            .set_default("http.bind_port", defaults.http.bind_port)?
             .set_default("http.metrics_enabled", defaults.http.metrics_enabled)?
             // Logging configuration
             .set_default("logging.trace_frames", defaults.logging.trace_frames)?
@@ -146,7 +146,8 @@ impl Config {
             // Add environment variables
             .add_source(
                 Environment::with_prefix(Self::ENV_PREFIX)
-                    .separator("_")
+                    .prefix_separator("_")
+                    .separator("__")
                     .try_parsing(true),
             )
             .build()?;
@@ -270,6 +271,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    #[serial_test::serial]
     fn test_default_config() {
         let config = Config::new().unwrap();
         assert_eq!(config.tcp.bind_port, 502);
@@ -277,14 +279,16 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_env_override() {
-        std::env::set_var("MODBUS_RELAY_TCP_BIND_PORT", "8080");
+        std::env::set_var("MODBUS_RELAY_TCP__BIND_PORT", "5000");
         let config = Config::new().unwrap();
-        assert_eq!(config.tcp.bind_port, 8080);
-        std::env::remove_var("MODBUS_RELAY_TCP_BIND_PORT");
+        assert_eq!(config.tcp.bind_port, 5000);
+        std::env::remove_var("MODBUS_RELAY_TCP__BIND_PORT");
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_file_config() {
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.yaml");
@@ -305,9 +309,10 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn test_validation() {
-        std::env::set_var("MODBUS_RELAY_TCP_BIND_PORT", "0");
+        std::env::set_var("MODBUS_RELAY_TCP__BIND_PORT", "0");
         assert!(Config::new().is_err());
-        std::env::remove_var("MODBUS_RELAY_TCP_BIND_PORT");
+        std::env::remove_var("MODBUS_RELAY_TCP__BIND_PORT");
     }
 }
