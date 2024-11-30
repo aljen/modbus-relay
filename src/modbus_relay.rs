@@ -15,9 +15,9 @@ use crate::{
         ClientErrorKind, ConfigValidationError, ConnectionError, FrameErrorKind, ProtocolErrorKind,
         RelayError,
     },
-    generate_request_id,
+    utils::generate_request_id,
     http_api::start_http_server,
-    relay_config::RelayConfig,
+    config::Config as RelayConfig,
     rtu_transport::RtuTransport,
     IoOperation, ModbusProcessor, TransportError,
 };
@@ -34,7 +34,7 @@ pub struct ModbusRelay {
 impl ModbusRelay {
     pub fn new(config: RelayConfig) -> Result<Self, RelayError> {
         // Validate the config first
-        config.validate()?;
+        RelayConfig::validate(&config)?;
 
         let transport = RtuTransport::new(&config)?;
 
@@ -485,9 +485,7 @@ async fn handle_client_inner(
         };
 
         // 3. Send response
-        if let Err(e) = send_response(&mut writer, &response, peer_addr).await {
-            return Err(e);
-        }
+        send_response(&mut writer, &response, peer_addr).await?
     }
 
     Ok(())

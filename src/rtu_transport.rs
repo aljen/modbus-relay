@@ -28,7 +28,7 @@ pub struct RtuTransport {
 
 impl RtuTransport {
     pub fn new(config: &RelayConfig) -> Result<Self, TransportError> {
-        info!("Opening serial port {}", config.serial_port_info());
+        info!("Opening serial port {}", config.rtu.serial_port_info());
 
         // Explicite otwieramy jako TTYPort na Unixie
         #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -38,7 +38,12 @@ impl RtuTransport {
             .stop_bits(config.rtu.stop_bits.into())
             .timeout(config.connection.serial_timeout)
             .flow_control(serialport::FlowControl::None)
-            .open_native()?;
+            .open_native()
+            .map_err(|e| TransportError::Io {
+                operation: IoOperation::Configure,
+                details: format!("serial port {}", config.rtu.device),
+                source: std::io::Error::new(std::io::ErrorKind::Other, e.description),
+            })?;
 
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         let raw_fd = tty_port.as_raw_fd();
@@ -53,7 +58,12 @@ impl RtuTransport {
             .stop_bits(config.stop_bits.into())
             .timeout(config.serial_timeout)
             .flow_control(serialport::FlowControl::None)
-            .open()?;
+            .open()
+            .map_err(|e| TransportError::Io {
+                operation: IoOperation::Configure,
+                details: format!("serial port {}", config.rtu_device),
+                source: std::io::Error::new(std::io::ErrorKind::Other, e.description),
+            })?;
 
         Ok(Self {
             port: Mutex::new(port),

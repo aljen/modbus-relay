@@ -1,0 +1,17 @@
+# Development configuration for modbus-relay
+
+logging:
+  # More verbose logging in development
+  level: "debug"
+  format: "pretty"
+
+rtu:
+  # Common development device path
+  device: "/dev/ttyAMA0"
+  # Lower baud rate for testing
+  baud_rate: 9600
+
+connection:
+  # Longer timeouts for debugging
+  transaction_timeout: "10s"
+  serial_timeout: "2s"

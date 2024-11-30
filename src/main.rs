@@ -1,70 +1,140 @@
-use clap::{Args, Parser};
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
+use std::process;
+use std::sync::Arc;
+
+use clap::Parser;
 use tracing::{error, info};
 
-use modbus_relay::{setup_logging, ModbusRelay, RelayConfig};
+use modbus_relay::{ModbusRelay, RelayConfig, RelayError, TransportError};
 
 #[derive(Parser)]
-#[command(author, version, about)]
+#[command(author, version, about, long_about = None)]
 struct Cli {
     #[command(flatten)]
     common: CommonArgs,
 }
 
-#[derive(Args)]
+#[derive(clap::Args)]
+#[group(multiple = false)]
 struct CommonArgs {
-    /// Path to the config file
-    #[arg(short, long, default_value = "/etc/modbus-relay.json")]
-    config: PathBuf,
+    /// Path to config file
+    #[arg(short, long, value_name = "FILE")]
+    config: Option<PathBuf>,
 
-    /// Dump default config and exit
-    #[arg(long = "dump-default-config")]
-    dump_default: bool,
+    /// Run in debug mode
+    #[arg(short, long)]
+    debug: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Parse command line args
-    let cli = Cli::parse();
+pub fn setup_logging(config: Option<&RelayConfig>) -> Result<(), RelayError> {
+    use modbus_relay::errors::InitializationError;
+    use modbus_relay::RelayError;
+    use time::UtcOffset;
+    use tracing_subscriber::fmt::time::OffsetTime;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::{filter::LevelFilter, EnvFilter, Layer, Registry};
 
-    if cli.common.dump_default {
-        let config = RelayConfig::default();
-        println!("{}", serde_json::to_string_pretty(&config)?);
-        return Ok(());
-    }
+    let timer = OffsetTime::new(
+        UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC),
+        time::format_description::well_known::Rfc3339,
+    );
 
-    // Load and validate configuration
-    let config = if cli.common.dump_default {
-        println!("{}", serde_json::to_string_pretty(&RelayConfig::default())?);
-        return Ok(());
-    } else {
-        RelayConfig::load(Some(&cli.common.config))?
-    };
+    // Build initial subscriber
+    let layer = tracing_subscriber::fmt::layer()
+        .with_target(false)
+        .with_thread_ids(true)
+        .with_thread_names(true)
+        .with_timer(timer);
 
-    setup_logging(&config)?;
+    // Configure based on config or defaults
+    let layer = if let Some(cfg) = config {
+        // Validate config if provided
+        cfg.logging.validate().map_err(RelayError::Init)?;
 
-    // Create and run relay
-    let relay = Arc::new(ModbusRelay::new(config)?);
-    let relay_clone = Arc::clone(&relay);
+        let mut env_filter =
+            EnvFilter::default().add_directive(cfg.logging.get_level_filter().into());
 
-    // Handle shutdown signals
-    tokio::spawn(async move {
-        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("Failed to create SIGTERM signal handler");
-        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-            .expect("Failed to create SIGINT signal handler");
-
-        tokio::select! {
-            _ = sigterm.recv() => info!("Received SIGTERM"),
-            _ = sigint.recv() => info!("Received SIGINT"),
+        if cfg.logging.trace_frames {
+            env_filter = env_filter
+                .add_directive("modbus_relay::protocol=trace".parse().unwrap())
+                .add_directive("modbus_relay::transport=trace".parse().unwrap());
         }
 
-        info!("Starting graceful shutdown");
-        if let Err(e) = relay_clone.shutdown().await {
-            error!("Error during shutdown: {}", e);
+        layer
+            .with_file(cfg.logging.include_location)
+            .with_line_number(cfg.logging.include_location)
+            .with_level(true)
+            .with_filter(env_filter)
+    } else {
+        // Default trace-level logging for startup
+        let env_filter = EnvFilter::default().add_directive(LevelFilter::TRACE.into());
+
+        layer
+            .with_file(true)
+            .with_line_number(true)
+            .with_level(true)
+            .with_filter(env_filter)
+    };
+
+    let subscriber = Registry::default().with(layer);
+
+    // Set up global subscriber only once
+    static LOGGER_INITIALIZED: std::sync::Once = std::sync::Once::new();
+    let mut error = None;
+
+    LOGGER_INITIALIZED.call_once(|| {
+        if let Err(e) = tracing::subscriber::set_global_default(subscriber) {
+            error = Some(RelayError::Init(InitializationError::logging(format!(
+                "Failed to initialize logging: {}",
+                e
+            ))));
         }
     });
 
+    if let Some(e) = error {
+        return Err(e);
+    }
+
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() {
+    if let Err(e) = run().await {
+        error!("Fatal error: {:#}", e);
+        if let Some(relay_error) = e.downcast_ref::<RelayError>() {
+            if let RelayError::Transport(TransportError::Io { details, .. }) = relay_error {
+                if details.contains("serial port") {
+                    error!("Hint: Make sure the configured serial port exists and you have permission to access it");
+                    #[cfg(target_os = "macos")]
+                    error!("Available serial ports on macOS can be listed with: ls -l /dev/tty.*");
+                    #[cfg(target_os = "linux")]
+                    error!("Available serial ports on Linux can be listed with: ls -l /dev/ttyUSB* /dev/ttyACM* /dev/ttyAMA*");
+                }
+            }
+        }
+        process::exit(1);
+    }
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    setup_logging(None)?;
+
+    info!("Starting Modbus Relay...");
+
+    let cli = Cli::parse();
+
+    // Initialize logging
+    let config = if let Some(config_path) = &cli.common.config {
+        RelayConfig::from_file(config_path.clone())?
+    } else {
+        RelayConfig::new()?
+    };
+
+    // Setup logging based on configuration
+    setup_logging(Some(&config))?;
+
+    let relay = Arc::new(ModbusRelay::new(config)?);
     relay.run().await?;
 
     Ok(())

@@ -1,0 +1,45 @@
+# Default configuration for modbus-relay
+
+tcp:
+  # TCP server bind address
+  bind_addr: "127.0.0.1"
+  # TCP server port
+  bind_port: 502
+
+rtu:
+  # Serial device path
+  device: "/dev/ttyAMA0"
+  # Baud rate
+  baud_rate: 9600
+  # Data bits (5-8)
+  data_bits: 8
+  # Parity (none, odd, even)
+  parity: "none"
+  # Stop bits ("one", "two")
+  stop_bits: "one"
+  # Whether to flush after write
+  flush_after_write: true
+
+  # Optional RTS configuration ("up", "down", "none")
+  rts_type: "down"
+  rts_delay_us: 3500
+
+connection:
+  # Transaction timeout
+  transaction_timeout: "5s"
+  # Serial port timeout
+  serial_timeout: "1s"
+  # Maximum frame size
+  max_frame_size: 256
+
+http:
+  # HTTP API bind address
+  bind_addr: "127.0.0.1"
+  # HTTP API port
+  bind_port: 8080
+
+logging:
+  # Log level (trace, debug, info, warn, error)
+  level: "info"
+  # Log format (pretty, json)
+  format: "pretty"

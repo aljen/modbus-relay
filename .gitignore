@@ -1,1 +1,3 @@
 /target
+# Local configuration overrides
+config/local.yaml

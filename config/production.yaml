@@ -1,0 +1,32 @@
+# Production configuration for modbus-relay
+
+tcp:
+  # Listen on all interfaces in production
+  bind_addr: "0.0.0.0"
+  bind_port: 502
+
+rtu:
+  # Common production device path
+  device: "/dev/ttyAMA0"
+  # Higher baud rate for production
+  baud_rate: 115200
+  # Enable RTS for better flow control
+  rts_type: "down"
+  rts_delay_us: 3500
+
+connection:
+  # Shorter timeouts in production
+  transaction_timeout: "3s"
+  serial_timeout: "500ms"
+  # Larger frame size for better throughput
+  max_frame_size: 512
+
+http:
+  # Listen on localhost only
+  bind_addr: "127.0.0.1"
+  bind_port: 8080
+
+logging:
+  # Less verbose logging in production
+  level: "warn"
+  format: "json"

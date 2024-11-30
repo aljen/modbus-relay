@@ -48,7 +48,7 @@ pub enum TransportError {
     #[error("Network error: {0}")]
     Network(std::io::Error),
 
-    #[error("I/O error during {operation}: {details}")]
+    #[error("I/O error: {operation} failed on {details}")]
     Io {
         operation: IoOperation,
         details: String,
@@ -73,6 +73,12 @@ pub enum TransportError {
 
 #[derive(Error, Debug)]
 pub enum InitializationError {
+    #[error("Invalid log level: {0}")]
+    InvalidLogLevel(String),
+
+    #[error("Invalid log format: {0}")]
+    InvalidLogFormat(String),
+
     #[error("Logging initialization error: {0}")]
     Logging(String),
 
@@ -123,20 +129,49 @@ pub enum BackoffError {
 
 #[derive(Error, Debug)]
 pub enum ConfigValidationError {
-    #[error("Invalid TCP configuration: {0}")]
-    InvalidTcp(String),
+    #[error("TCP configuration error: {0}")]
+    Tcp(String),
 
-    #[error("Invalid RTU configuration: {0}")]
-    InvalidRtu(String),
+    #[error("RTU configuration error: {0}")]
+    Rtu(String),
 
-    #[error("Invalid timing configuration: {0}")]
-    InvalidTiming(String),
+    #[error("Timing configuration error: {0}")]
+    Timing(String),
 
-    #[error("Invalid security configuration: {0}")]
-    InvalidSecurity(String),
+    #[error("Security configuration error: {0}")]
+    Security(String),
 
-    #[error("Invalid connection configuration: {0}")]
-    InvalidConnection(String),
+    #[error("Connection configuration error: {0}")]
+    Connection(String),
+
+    #[error("Configuration error: {0}")]
+    Config(String),
+}
+
+impl ConfigValidationError {
+    pub fn tcp(details: impl Into<String>) -> Self {
+        Self::Tcp(details.into())
+    }
+
+    pub fn rtu(details: impl Into<String>) -> Self {
+        Self::Rtu(details.into())
+    }
+
+    pub fn timing(details: impl Into<String>) -> Self {
+        Self::Timing(details.into())
+    }
+
+    pub fn security(details: impl Into<String>) -> Self {
+        Self::Security(details.into())
+    }
+
+    pub fn connection(details: impl Into<String>) -> Self {
+        Self::Connection(details.into())
+    }
+
+    pub fn config(details: impl Into<String>) -> Self {
+        Self::Config(details.into())
+    }
 }
 
 #[derive(Error, Debug)]
@@ -538,42 +573,6 @@ impl ConnectionError {
     }
 }
 
-impl ConfigValidationError {
-    pub fn tcp(details: impl Into<String>) -> Self {
-        ConfigValidationError::InvalidTcp(details.into())
-    }
-
-    pub fn rtu(details: impl Into<String>) -> Self {
-        ConfigValidationError::InvalidRtu(details.into())
-    }
-
-    pub fn timing(details: impl Into<String>) -> Self {
-        ConfigValidationError::InvalidTiming(details.into())
-    }
-
-    pub fn security(details: impl Into<String>) -> Self {
-        ConfigValidationError::InvalidSecurity(details.into())
-    }
-
-    pub fn connection(details: impl Into<String>) -> Self {
-        ConfigValidationError::InvalidConnection(details.into())
-    }
-}
-
-impl RtsError {
-    pub fn signal(details: impl Into<String>) -> Self {
-        RtsError::SignalError(details.into())
-    }
-
-    pub fn timing(details: impl Into<String>) -> Self {
-        RtsError::TimingError(details.into())
-    }
-
-    pub fn config(details: impl Into<String>) -> Self {
-        RtsError::ConfigError(details.into())
-    }
-}
-
 impl From<BackoffError> for RelayError {
     fn from(err: BackoffError) -> Self {
         RelayError::Connection(ConnectionError::Backoff(err))
@@ -583,6 +582,12 @@ impl From<BackoffError> for RelayError {
 impl From<RtsError> for RelayError {
     fn from(err: RtsError) -> Self {
         RelayError::Transport(TransportError::Rts(err))
+    }
+}
+
+impl From<config::ConfigError> for RelayError {
+    fn from(err: config::ConfigError) -> Self {
+        Self::Config(ConfigValidationError::config(err.to_string()))
     }
 }
 
@@ -666,8 +671,8 @@ mod tests {
     #[test]
     fn test_config_validation_error_creation() {
         let err = ConfigValidationError::tcp("Invalid port");
-        assert!(matches!(err, ConfigValidationError::InvalidTcp(_)));
-        assert_eq!(err.to_string(), "Invalid TCP configuration: Invalid port");
+        assert!(matches!(err, ConfigValidationError::Tcp(_)));
+        assert_eq!(err.to_string(), "TCP configuration error: Invalid port");
     }
 
     #[test]
