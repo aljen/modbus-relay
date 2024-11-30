@@ -40,13 +40,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Install system dependencies
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
+      - name: Install common dependencies
         run: |
-          sudo apt-get update && \
-          sudo apt-get install -y libudev-dev && \
-          find /usr -name libudev.pc
-      
+          sudo apt-get update
+          sudo apt-get install -y pkg-config
+
+      - name: Install cross
+        uses: taiki-e/install-action@cross
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -63,9 +64,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-${{ matrix.target }}-
       
-      - name: Install cross
-        uses: taiki-e/install-action@cross
-        
       - name: Install cargo-deb
         run: cargo install cargo-deb
 
@@ -144,7 +142,7 @@ jobs:
           mkdir -p pkg
           cd pkg
           mv ../modbus-relay.tar.gz .
-          cp /github/workspace/dist/arch/PKGBUILD .
+          cp /tmp/modbus-relay/dist/arch/PKGBUILD .
           CARCH=${{ matrix.arch }} makepkg -s --noconfirm
           
       - name: Upload artifacts
