@@ -17,13 +17,6 @@ use crate::{errors::FrameError, FrameErrorKind, RelayError, RtuTransport};
 /// # Returns
 ///
 /// The computed 16-bit CRC as a `u16` value.
-///
-/// # Example
-///
-/// ```rust
-/// let frame: [u8; 6] = [0x01, 0x03, 0x00, 0x00, 0x00, 0x0A];
-/// let crc = calc_crc16(&frame);
-/// ```
 fn calc_crc16(data: &[u8]) -> u16 {
     // Precomputed CRC16 lookup table for polynomial 0xA001 (Modbus standard)
     const CRC16_TABLE: [u16; 256] = [

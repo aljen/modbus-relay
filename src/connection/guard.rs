@@ -1,5 +1,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
+use tokio::sync::OwnedSemaphorePermit;
+
 use super::ConnectionManager;
 
 /// RAII guard for the connection
@@ -7,7 +9,8 @@ use super::ConnectionManager;
 pub struct ConnectionGuard {
     pub manager: Arc<ConnectionManager>,
     pub addr: SocketAddr,
-    pub _global_permit: tokio::sync::OwnedSemaphorePermit,
+    pub _global_permit: OwnedSemaphorePermit,
+    pub _per_ip_permit: Option<OwnedSemaphorePermit>,
 }
 
 impl Drop for ConnectionGuard {

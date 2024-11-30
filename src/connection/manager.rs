@@ -58,6 +58,24 @@ impl Manager {
         self: &Arc<Self>,
         addr: SocketAddr,
     ) -> Result<ConnectionGuard, RelayError> {
+        // Check per IP limit if enabled
+        let per_ip_permit = if let Some(per_ip_limit) = self.config.per_ip_limits {
+            let mut semaphores = self.per_ip_semaphores.lock().await;
+
+            let semaphore = semaphores
+                .entry(addr)
+                .or_insert_with(|| Arc::new(Semaphore::new(per_ip_limit as usize)));
+
+            Some(semaphore.clone().try_acquire_owned().map_err(|_| {
+                RelayError::Connection(ConnectionError::limit_exceeded(format!(
+                    "Per-IP limit ({}) reached for {}",
+                    per_ip_limit, addr
+                )))
+            })?)
+        } else {
+            None
+        };
+
         // Check if the global limit has been exceeded
         let global_permit = self
             .global_semaphore
@@ -68,21 +86,6 @@ impl Manager {
                     "Global connection limit reached",
                 ))
             })?;
-
-        // Check per IP limit if enabled
-        if let Some(per_ip_limit) = self.config.per_ip_limits {
-            let mut semaphores = self.per_ip_semaphores.lock().await;
-            let semaphore = semaphores
-                .entry(addr)
-                .or_insert_with(|| Arc::new(Semaphore::new(per_ip_limit as usize)));
-
-            let _ = semaphore.try_acquire().map_err(|_| {
-                RelayError::Connection(ConnectionError::limit_exceeded(format!(
-                    "Per-IP limit ({}) reached for {}",
-                    per_ip_limit, addr
-                )))
-            })?;
-        }
 
         // Update statistics
         {
@@ -112,6 +115,7 @@ impl Manager {
             manager: Arc::clone(self),
             addr,
             _global_permit: global_permit,
+            _per_ip_permit: per_ip_permit,
         })
     }
 
@@ -160,27 +164,28 @@ impl Manager {
     /// Cleans up idle connections
     pub async fn cleanup_idle_connections(&self) -> Result<(), RelayError> {
         let now = Instant::now();
-        let mut stats = self.stats.lock().await;
-        let mut cleanup_errors = Vec::new();
+        let to_clean = {
+            let stats = self.stats.lock().await;
+            stats
+                .iter()
+                .filter(|(_, s)| now.duration_since(s.last_active) >= self.config.idle_timeout)
+                .map(|(addr, s)| (*addr, s.active_connections))
+                .collect::<Vec<_>>()
+        };
 
-        stats.retain(|addr, s| {
-            if now.duration_since(s.last_active) >= self.config.idle_timeout {
-                if s.active_connections > 0 {
-                    cleanup_errors.push(format!(
-                        "Forced cleanup of {} active connections for {}",
-                        s.active_connections, addr
-                    ));
+        // Separately for each connection
+        for (addr, conn_count) in to_clean {
+            let mut stats = self.stats.lock().await;
+            if let Some(current) = stats.get(&addr) {
+                // Sprawdź czy stan się nie zmienił
+                if now.duration_since(current.last_active) >= self.config.idle_timeout {
+                    stats.remove(&addr);
+                    info!(
+                        "Cleaned up idle connection {} ({} connections)",
+                        addr, conn_count
+                    );
                 }
-                false
-            } else {
-                true
             }
-        });
-
-        if !cleanup_errors.is_empty() {
-            return Err(RelayError::Connection(ConnectionError::invalid_state(
-                format!("Cleanup encountered issues: {}", cleanup_errors.join(", ")),
-            )));
         }
 
         Ok(())
