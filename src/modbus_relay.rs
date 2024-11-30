@@ -264,8 +264,8 @@ impl ModbusRelay {
             Ok(results) => {
                 let mut failed = 0;
                 for (i, result) in results.into_iter().enumerate() {
-                    if let Err(e) = result {
-                        error!("Task {} failed during shutdown: {}", i, e);
+                    if result.is_err() {
+                        error!("Task {} failed during shutdown: {}", i, result.unwrap_err());
                         failed += 1;
                     }
                 }
@@ -412,7 +412,7 @@ async fn handle_client(
 
     let result = handle_client_inner(stream, peer_addr, transport, manager.clone()).await;
 
-    if let Err(_) = result {
+    if result.is_err() {
         manager.record_request(peer_addr, false).await;
     }
 

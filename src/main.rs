@@ -99,15 +99,13 @@ pub fn setup_logging(config: Option<&RelayConfig>) -> Result<(), RelayError> {
 async fn main() {
     if let Err(e) = run().await {
         error!("Fatal error: {:#}", e);
-        if let Some(relay_error) = e.downcast_ref::<RelayError>() {
-            if let RelayError::Transport(TransportError::Io { details, .. }) = relay_error {
-                if details.contains("serial port") {
-                    error!("Hint: Make sure the configured serial port exists and you have permission to access it");
-                    #[cfg(target_os = "macos")]
-                    error!("Available serial ports on macOS can be listed with: ls -l /dev/tty.*");
-                    #[cfg(target_os = "linux")]
-                    error!("Available serial ports on Linux can be listed with: ls -l /dev/ttyUSB* /dev/ttyACM* /dev/ttyAMA*");
-                }
+        if let Some(RelayError::Transport(TransportError::Io { details, .. })) = e.downcast_ref::<RelayError>() {
+            if details.contains("serial port") {
+                error!("Hint: Make sure the configured serial port exists and you have permission to access it");
+                #[cfg(target_os = "macos")]
+                error!("Hint: On macOS, you might need to install the driver from https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers");
+                #[cfg(target_os = "linux")]
+                error!("Hint: On Linux, you might need to add your user to the dialout group: sudo usermod -a -G dialout $USER");
             }
         }
         process::exit(1);
