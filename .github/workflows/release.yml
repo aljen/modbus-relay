@@ -71,8 +71,11 @@ jobs:
 
       - name: Build
         run: |
-          PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig \
-          cross build --release --target ${{ matrix.target }}
+          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
+            cargo build --release --target ${{ matrix.target }}
+          else
+            cross build --release --target ${{ matrix.target }}
+          fi
           
       - name: Build deb package
         run: cargo deb --target ${{ matrix.target }}
