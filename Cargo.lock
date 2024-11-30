@@ -866,7 +866,7 @@ dependencies = [
 
 [[package]]
 name = "modbus-relay"
-version = "0.1.0"
+version = "2024.11.0"
 dependencies = [
  "axum",
  "clap",

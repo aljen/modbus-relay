@@ -1,6 +1,6 @@
 [package]
 name = "modbus-relay"
-version = "0.1.0"
+version = "2024.11.0"
 edition = "2021"
 authors = ["Artur Wyszyński <artur.wyszynski@wildpixelgames.com>"]
 description = "A high performance Modbus TCP to RTU relay"
