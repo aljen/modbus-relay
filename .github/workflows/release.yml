@@ -44,9 +44,8 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           sudo apt-get update && \
-          sudo apt-get install -y libudev-dev pkg-config systemd && \
-          pkg-config --list-all | grep udev && \
-          echo "PKG_CONFIG_PATH=$(pkg-config --variable pc_path pkg-config)" >> $GITHUB_ENV
+          sudo apt-get install -y libudev-dev && \
+          find /usr -name libudev.pc
       
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -70,8 +69,10 @@ jobs:
       - name: Install cargo-deb
         uses: taiki-e/install-action@cargo-deb
 
-      - name: Build binary
-        run: cross build --release --target ${{ matrix.target }}
+      - name: Build
+        run: |
+          PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig \
+          cross build --release --target ${{ matrix.target }}
           
       - name: Build deb package
         run: cargo deb --target ${{ matrix.target }}
