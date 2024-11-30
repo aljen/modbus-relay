@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 use tracing::level_filters::LevelFilter;
 
-use crate::errors::InitializationError;
-
 fn default_log_level() -> String {
     "info".to_string()
 }
@@ -46,22 +44,6 @@ impl Default for Config {
 }
 
 impl Config {
-    pub fn validate(&self) -> Result<(), InitializationError> {
-        // Validate log level
-        match self.log_level.to_lowercase().as_str() {
-            "error" | "warn" | "info" | "debug" | "trace" => {}
-            _ => return Err(InitializationError::InvalidLogLevel(self.log_level.clone())),
-        }
-
-        // Validate log format
-        match self.format.to_lowercase().as_str() {
-            "pretty" | "json" => {}
-            _ => return Err(InitializationError::InvalidLogFormat(self.format.clone())),
-        }
-
-        Ok(())
-    }
-
     pub fn get_level_filter(&self) -> LevelFilter {
         match self.log_level.to_lowercase().as_str() {
             "error" => LevelFilter::ERROR,

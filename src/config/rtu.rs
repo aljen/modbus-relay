@@ -28,7 +28,7 @@ pub struct Config {
     pub serial_timeout: Duration,
 
     /// Maximum size of the request/response buffer
-    pub max_frame_size: usize,
+    pub max_frame_size: u64,
 }
 
 impl Default for Config {

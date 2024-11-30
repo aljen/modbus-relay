@@ -32,13 +32,42 @@ rtu:
   max_frame_size: 256
 
 http:
+  # Enabled
+  enabled: true
   # HTTP API bind address
   bind_addr: "127.0.0.1"
   # HTTP API port
   bind_port: 8080
+  # Metrics enabled
+  metrics_enabled: true
 
 logging:
+  # Trace modbus frames
+  trace_frames: false
   # Log level (trace, debug, info, warn, error)
   level: "info"
   # Log format (pretty, json)
   format: "pretty"
+  # Use file:line
+  include_location: true
+
+connection:
+  # Maximum number of concurrent connections
+  max_connections: 100
+  # Timeout for idle connections
+  idle_timeout: "60s"
+  # Timeout for establishing a connection
+  connect_timeout: "5s"
+  # Optional per IP limits
+  per_ip_limits: 10
+  # Parameters for backoff strategy
+  backoff:
+    # Initial wait time
+    initial_interval: "100ms"
+    # Maximum wait time
+    max_interval: "30s"
+    # Multiplier for each subsequent attempt
+    multiplier: 2.0
+    # Maximum number of attempts
+    max_retries: 5
+

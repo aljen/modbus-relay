@@ -165,7 +165,7 @@ impl RtuTransport {
         request: &[u8],
         response: &mut [u8],
     ) -> Result<usize, RelayError> {
-        if request.len() > self.config.max_frame_size {
+        if request.len() > self.config.max_frame_size as usize {
             return Err(RelayError::frame(
                 FrameErrorKind::TooLong,
                 format!("Request frame too long: {} bytes", request.len()),

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use config::{Config as ConfigBuilder, ConfigError, Environment, File, FileFormat};
 
-use super::{HttpConfig, LoggingConfig, RtuConfig, TcpConfig};
+use super::{ConnectionConfig, HttpConfig, LoggingConfig, RtuConfig, TcpConfig};
 
 /// Main application configuration
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +24,10 @@ pub struct Config {
     /// Logging configuration
     #[serde(default)]
     pub logging: LoggingConfig,
+
+    /// Connection management configuration
+    #[serde(default)]
+    pub connection: ConnectionConfig,
 }
 
 impl Config {
@@ -59,6 +63,8 @@ impl Config {
             .set_default("rtu.parity", defaults.rtu.parity.to_string())?
             .set_default("rtu.stop_bits", defaults.rtu.stop_bits.to_string())?
             .set_default("rtu.flush_after_write", defaults.rtu.flush_after_write)?
+            .set_default("rtu.rts_type", defaults.rtu.rts_type.to_string())?
+            .set_default("rtu.rts_delay_us", defaults.rtu.rts_delay_us)?
             .set_default(
                 "rtu.transaction_timeout",
                 format!("{}s", defaults.rtu.transaction_timeout.as_secs()),
@@ -67,10 +73,11 @@ impl Config {
                 "rtu.serial_timeout",
                 format!("{}s", defaults.rtu.serial_timeout.as_secs()),
             )?
-            .set_default("rtu.max_frame_size", defaults.rtu.max_frame_size as i64)?
+            .set_default("rtu.max_frame_size", defaults.rtu.max_frame_size)?
             // HTTP configuration
             .set_default("http.enabled", defaults.http.enabled)?
-            .set_default("http.port", defaults.http.port)?
+            .set_default("http.bind_addr", defaults.http.bind_addr)?
+            .set_default("http.port", defaults.http.bind_port)?
             .set_default("http.metrics_enabled", defaults.http.metrics_enabled)?
             // Logging configuration
             .set_default("logging.trace_frames", defaults.logging.trace_frames)?
@@ -79,6 +86,43 @@ impl Config {
             .set_default(
                 "logging.include_location",
                 defaults.logging.include_location,
+            )?
+            // Connection configuration
+            .set_default(
+                "connection.max_connections",
+                defaults.connection.max_connections,
+            )?
+            .set_default(
+                "connection.idle_timeout",
+                format!("{}s", defaults.connection.idle_timeout.as_secs()),
+            )?
+            .set_default(
+                "connection.connect_timeout",
+                format!("{}s", defaults.connection.connect_timeout.as_secs()),
+            )?
+            .set_default(
+                "connection.per_ip_limits",
+                defaults.connection.per_ip_limits,
+            )?
+            // Connection backoff configuration
+            .set_default(
+                "connection.backoff.initial_interval",
+                format!(
+                    "{}s",
+                    defaults.connection.backoff.initial_interval.as_secs()
+                ),
+            )?
+            .set_default(
+                "connection.backoff.max_interval",
+                format!("{}s", defaults.connection.backoff.max_interval.as_secs()),
+            )?
+            .set_default(
+                "connection.backoff.multiplier",
+                defaults.connection.backoff.multiplier,
+            )?
+            .set_default(
+                "connection.backoff.max_retries",
+                defaults.connection.backoff.max_retries,
             )?;
 
         let config = builder
@@ -165,6 +209,54 @@ impl Config {
         }
         if config.rtu.max_frame_size == 0 {
             return Err(validation_error("Max frame size must be non-zero"));
+        }
+
+        // Validate log level
+        match config.logging.log_level.to_lowercase().as_str() {
+            "error" | "warn" | "info" | "debug" | "trace" => {}
+            _ => return Err(validation_error("Invalid log level")),
+        }
+
+        // Validate log format
+        match config.logging.format.to_lowercase().as_str() {
+            "pretty" | "json" => {}
+            _ => return Err(validation_error("Invalid log format")),
+        }
+
+        // Validate connection configuration
+        if config.connection.max_connections == 0 {
+            return Err(validation_error("Maximum connections must be non-zero"));
+        }
+        if config.connection.idle_timeout.is_zero() {
+            return Err(validation_error("Idle timeout must be non-zero"));
+        }
+        if config.connection.connect_timeout.is_zero() {
+            return Err(validation_error("Connect timeout must be non-zero"));
+        }
+        if let Some(limit) = config.connection.per_ip_limits {
+            if limit == 0 {
+                return Err(validation_error("Per IP connection limit must be non-zero"));
+            }
+            if limit > config.connection.max_connections {
+                return Err(validation_error(
+                    "Per IP connection limit cannot exceed maximum connections",
+                ));
+            }
+        }
+        // Validate backoff configuration
+        if config.connection.backoff.initial_interval.is_zero() {
+            return Err(validation_error(
+                "Backoff initial interval must be non-zero",
+            ));
+        }
+        if config.connection.backoff.max_interval.is_zero() {
+            return Err(validation_error("Backoff max interval must be non-zero"));
+        }
+        if config.connection.backoff.multiplier <= 0.0 {
+            return Err(validation_error("Backoff multiplier must be positive"));
+        }
+        if config.connection.backoff.max_retries == 0 {
+            return Err(validation_error("Backoff max retries must be non-zero"));
         }
 
         Ok(())

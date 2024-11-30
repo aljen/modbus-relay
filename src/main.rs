@@ -48,9 +48,6 @@ pub fn setup_logging(config: Option<&RelayConfig>) -> Result<(), RelayError> {
 
     // Configure based on config or defaults
     let layer = if let Some(cfg) = config {
-        // Validate config if provided
-        cfg.logging.validate().map_err(RelayError::Init)?;
-
         let mut env_filter =
             EnvFilter::default().add_directive(cfg.logging.get_level_filter().into());
 

@@ -10,13 +10,12 @@ use tokio::{
 use tracing::{debug, error, info};
 
 use crate::errors::{
-    ClientErrorKind, ConfigValidationError, ConnectionError, FrameErrorKind, ProtocolErrorKind,
-    RelayError, TransportError,
+    ClientErrorKind, ConnectionError, FrameErrorKind, ProtocolErrorKind, RelayError, TransportError,
 };
 use crate::http_api::start_http_server;
 use crate::rtu_transport::RtuTransport;
 use crate::utils::generate_request_id;
-use crate::{ConnectionConfig, ConnectionManager, IoOperation, ModbusProcessor, RelayConfig};
+use crate::{ConnectionManager, IoOperation, ModbusProcessor, RelayConfig};
 
 pub struct ModbusRelay {
     config: RelayConfig,
@@ -34,17 +33,15 @@ impl ModbusRelay {
 
         let transport = RtuTransport::new(&config.rtu, config.logging.trace_frames)?;
 
-        let conn_config = ConnectionConfig::default(); // TODO: Add to RelayConfig
-        conn_config
-            .validate()
-            .map_err(|e| RelayError::Config(ConfigValidationError::connection(e.to_string())))?;
+        // Initialize connection manager with connection config from RelayConfig
+        let connection_manager = Arc::new(ConnectionManager::new(config.connection.clone()));
 
         let (main_shutdown, _) = tokio::sync::watch::channel(false);
 
         Ok(Self {
             config,
             transport: Arc::new(transport),
-            connection_manager: Arc::new(ConnectionManager::new(conn_config)),
+            connection_manager,
             shutdown: broadcast::channel(1).0,
             main_shutdown,
             tasks: Arc::new(Mutex::new(Vec::new())),
@@ -122,7 +119,10 @@ impl ModbusRelay {
                 let config = self.config.clone();
 
                 tokio::spawn(async move {
-                    if let Err(e) = start_http_server(config.http.port, manager, rx).await {
+                    if let Err(e) =
+                        start_http_server(config.http.bind_addr, config.http.bind_port, manager, rx)
+                            .await
+                    {
                         error!("HTTP server error: {}", e);
                         return Err(RelayError::Transport(TransportError::Io {
                             operation: IoOperation::Listen,

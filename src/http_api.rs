@@ -48,6 +48,7 @@ async fn stats_handler(State(state): State<ApiState>) -> impl IntoResponse {
 }
 
 pub async fn start_http_server(
+    address: String,
     port: u16,
     manager: Arc<ConnectionManager>,
     mut shutdown_rx: broadcast::Receiver<()>,
@@ -57,7 +58,7 @@ pub async fn start_http_server(
         .route("/stats", get(stats_handler))
         .with_state(manager);
 
-    let addr = format!("127.0.0.1:{}", port);
+    let addr = format!("{}:{}", address, port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
     info!("HTTP server listening on {}", addr);

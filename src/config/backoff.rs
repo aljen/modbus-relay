@@ -1,15 +1,19 @@
 use std::time::Duration;
 
-#[derive(Debug, Clone)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Initial wait time
+    #[serde(with = "humantime_serde")]
     pub initial_interval: Duration,
     /// Maximum wait time
+    #[serde(with = "humantime_serde")]
     pub max_interval: Duration,
     /// Multiplier for each subsequent attempt
     pub multiplier: f64,
     /// Maximum number of attempts
-    pub max_retries: usize,
+    pub max_retries: u64,
 }
 
 impl Default for Config {

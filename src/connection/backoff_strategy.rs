@@ -19,7 +19,7 @@ impl BackoffStrategy {
     }
 
     pub fn next_backoff(&mut self) -> Option<Duration> {
-        if self.current_attempt >= self.config.max_retries {
+        if self.current_attempt >= self.config.max_retries as usize {
             return None;
         }
 

@@ -42,7 +42,7 @@ impl Manager {
     pub fn new(config: ConnectionConfig) -> Self {
         Self {
             per_ip_semaphores: Arc::new(Mutex::new(HashMap::new())),
-            global_semaphore: Arc::new(Semaphore::new(config.max_connections)),
+            global_semaphore: Arc::new(Semaphore::new(config.max_connections as usize)),
             stats: Arc::new(Mutex::new(HashMap::new())),
             config,
             total_connections: Arc::new(AtomicU64::new(0)),
@@ -74,7 +74,7 @@ impl Manager {
             let mut semaphores = self.per_ip_semaphores.lock().await;
             let semaphore = semaphores
                 .entry(addr)
-                .or_insert_with(|| Arc::new(Semaphore::new(per_ip_limit)));
+                .or_insert_with(|| Arc::new(Semaphore::new(per_ip_limit as usize)));
 
             let _ = semaphore.try_acquire().map_err(|_| {
                 RelayError::Connection(ConnectionError::limit_exceeded(format!(
