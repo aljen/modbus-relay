@@ -5,7 +5,7 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 use tracing::info;
 
-use crate::connection_manager::ConnectionManager;
+use crate::ConnectionManager;
 
 #[derive(Debug, Serialize)]
 struct HealthResponse {

@@ -9,18 +9,14 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 
-use crate::{
-    config::Config as RelayConfig,
-    connection_manager::{ConnectionConfig, ConnectionManager},
-    errors::{
-        ClientErrorKind, ConfigValidationError, ConnectionError, FrameErrorKind, ProtocolErrorKind,
-        RelayError,
-    },
-    http_api::start_http_server,
-    rtu_transport::RtuTransport,
-    utils::generate_request_id,
-    IoOperation, ModbusProcessor, TransportError,
+use crate::errors::{
+    ClientErrorKind, ConfigValidationError, ConnectionError, FrameErrorKind, ProtocolErrorKind,
+    RelayError, TransportError,
 };
+use crate::http_api::start_http_server;
+use crate::rtu_transport::RtuTransport;
+use crate::utils::generate_request_id;
+use crate::{ConnectionConfig, ConnectionManager, IoOperation, ModbusProcessor, RelayConfig};
 
 pub struct ModbusRelay {
     config: RelayConfig,

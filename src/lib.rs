@@ -1,5 +1,5 @@
 pub mod config;
-pub mod connection_manager;
+pub mod connection;
 pub mod errors;
 pub mod http_api;
 pub mod modbus;
@@ -7,9 +7,11 @@ pub mod modbus_relay;
 pub mod rtu_transport;
 mod utils;
 
-pub use config::RtsType;
-pub use config::{Config as RelayConfig, HttpConfig, LoggingConfig, RtuConfig, TcpConfig};
-pub use config::{DataBits, Parity, StopBits};
+pub use config::{ConnectionConfig, HttpConfig, LoggingConfig, RelayConfig, RtuConfig, TcpConfig};
+pub use config::{DataBits, Parity, RtsType, StopBits};
+pub use connection::BackoffStrategy;
+pub use connection::{ClientStats, ConnectionStats, IpStats};
+pub use connection::{ConnectionGuard, ConnectionManager};
 pub use errors::{
     BackoffError, ClientErrorKind, ConfigValidationError, ConnectionError, FrameErrorKind,
     IoOperation, ProtocolErrorKind, RelayError, RtsError, SerialErrorKind, TransportError,
