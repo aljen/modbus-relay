@@ -182,9 +182,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-arch-cargo-x86_64-
 
-      - name: Build
-        run: cargo build --release --target x86_64-unknown-linux-gnu
-
       - name: Prepare PKGBUILD
         run: |
           VERSION=$(grep -m1 'version =' Cargo.toml | cut -d '"' -f2)

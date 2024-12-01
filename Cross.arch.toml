@@ -1,5 +1,0 @@
-[target.aarch64-unknown-linux-gnu]
-pre-build = ["pacman -Syu --noconfirm", "pacman -S --noconfirm systemd-libs"]
-
-[target.armv7-unknown-linux-gnueabihf]
-pre-build = ["pacman -Syu --noconfirm", "pacman -S --noconfirm systemd-libs"]
