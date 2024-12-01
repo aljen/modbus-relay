@@ -107,12 +107,14 @@ jobs:
       - name: Build
         env:
           PKG_CONFIG_ALLOW_CROSS: "1"
-          PKG_CONFIG_PATH: "/usr/lib/${{ matrix.target }}/pkgconfig"
-          PKG_CONFIG_SYSROOT_DIR: "/usr"
-          PKG_CONFIG_LIBDIR: "/usr/lib/${{ matrix.target }}/pkgconfig"
         run: |
           if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
+            # Native build uses standard system paths
             cargo build --release --target ${{ matrix.target }}
           else
+            # Cross compilation requires special paths
+            PKG_CONFIG_PATH="/usr/lib/${{ matrix.target }}/pkgconfig" \
+            PKG_CONFIG_SYSROOT_DIR="/usr" \
+            PKG_CONFIG_LIBDIR="/usr/lib/${{ matrix.target }}/pkgconfig" \
             cross build --release --target ${{ matrix.target }}
           fi
