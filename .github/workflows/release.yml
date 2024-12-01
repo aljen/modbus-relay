@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 env:
   CARGO_TERM_COLOR: always
@@ -39,7 +39,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install common dependencies
         run: |
           sudo apt-get update
@@ -48,13 +48,20 @@ jobs:
       - name: Install target specific dependencies
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
-          sudo apt-get install -y libudev-dev
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev dpkg-dev
+
+      - name: Set library path
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          echo "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:$LIBRARY_PATH" >> $GITHUB_ENV
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      
+
       - name: Install cross
         uses: taiki-e/install-action@cross
 
@@ -82,18 +89,22 @@ jobs:
         run: cargo install cargo-deb
 
       - name: Build
+        env:
+          PKG_CONFIG_ALLOW_CROSS: "1"
+          PKG_CONFIG_PATH: "/usr/lib/${{ matrix.target }}/pkgconfig"
+          PKG_CONFIG_SYSROOT_DIR: "/usr"
         run: |
           if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
             cargo build --release --target ${{ matrix.target }}
           else
             cross build --release --target ${{ matrix.target }}
           fi
-          
+
       - name: Build deb package
         run: cargo deb --target ${{ matrix.target }}
-        
+
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: deb-${{ matrix.arch }}
           path: target/${{ matrix.target }}/debian/*.deb
@@ -122,12 +133,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Install dependencies
         run: |
           # Update system
           pacman -Syu --noconfirm
-          
+
           # Install common dependencies
           pacman -S --noconfirm \
             git \
@@ -187,7 +198,7 @@ jobs:
           cp -r . "/tmp/modbus-relay"
           cd /tmp
           tar czf "modbus-relay.tar.gz" "modbus-relay"
-          
+
       - name: Build package
         run: |
           cd /tmp
@@ -196,9 +207,9 @@ jobs:
           mv ../modbus-relay.tar.gz .
           cp /tmp/modbus-relay/dist/arch/PKGBUILD .
           CARCH=${{ matrix.arch }} makepkg -s --noconfirm
-          
+
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: pkg-${{ matrix.arch }}
           path: /tmp/pkg/*.pkg.tar.zst
@@ -211,9 +222,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      
-      - uses: actions/download-artifact@v3
-        
+
+      - uses: actions/download-artifact@v4
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
