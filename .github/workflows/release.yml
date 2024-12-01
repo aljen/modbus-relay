@@ -200,7 +200,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pkg-x86_64
-          path: /tmp/pkg/*.pkg.tar.zst
+          path: ./*.pkg.tar.zst
 
   create-release:
     name: Create Release
