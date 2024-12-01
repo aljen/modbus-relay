@@ -1,0 +1,5 @@
+[target.aarch64-unknown-linux-gnu]
+pre-build = ["pacman -Sy --noconfirm && pacman -S --noconfirm aarch64-linux-gnu-gcc libudev"]
+
+[target.armv7-unknown-linux-gnueabihf]
+pre-build = ["pacman -Sy --noconfirm && pacman -S --noconfirm arm-linux-gnueabihf-gcc libudev"]
