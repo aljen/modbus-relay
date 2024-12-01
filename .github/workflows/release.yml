@@ -104,12 +104,14 @@ jobs:
               PKG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig"
             fi
 
-            # Vars will be passed to both commands thanks to passthrough in Cross.toml
-            export PKG_CONFIG_PATH="$PKG_PATH"
-            export PKG_CONFIG_SYSROOT_DIR="/usr"
-            export PKG_CONFIG_LIBDIR="$PKG_PATH"
-
+            PKG_CONFIG_PATH="$PKG_PATH" \
+            PKG_CONFIG_SYSROOT_DIR="/usr" \
+            PKG_CONFIG_LIBDIR="$PKG_PATH" \
             cross build --release --target ${{ matrix.target }}
+
+            PKG_CONFIG_PATH="$PKG_PATH" \
+            PKG_CONFIG_SYSROOT_DIR="/usr" \
+            PKG_CONFIG_LIBDIR="$PKG_PATH" \
             cargo deb --target ${{ matrix.target }}
           fi
 
