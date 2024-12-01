@@ -189,17 +189,10 @@ jobs:
         run: |
           VERSION=$(grep -m1 'version =' Cargo.toml | cut -d '"' -f2)
           sed -i "s/pkgver=.*/pkgver=$VERSION/" dist/arch/PKGBUILD
-          cp -r . "/tmp/modbus-relay"
-          cd /tmp
-          tar czf "modbus-relay.tar.gz" "modbus-relay"
+          cp dist/arch/PKGBUILD .
 
       - name: Build package
         run: |
-          cd /tmp
-          mkdir -p pkg
-          cd pkg
-          mv ../modbus-relay.tar.gz .
-          cp /tmp/modbus-relay/dist/arch/PKGBUILD .
           chown -R nobody:nobody .
           runuser -u nobody -- makepkg -s --noconfirm
 
