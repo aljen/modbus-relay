@@ -11,10 +11,13 @@ makedepends=('cargo' 'git')
 backup=('etc/modbus-relay/config.yaml')
 
 build() {
+  cd "$srcdir/$pkgname"
   cargo build --release
 }
 
 package() {
+  cd "$srcdir/$pkgname"
+
   # Binary
   install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
 
