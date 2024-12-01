@@ -70,8 +70,8 @@ jobs:
             ${{ runner.os }}-cargo-${{ matrix.target }}-
 
       - name: Cache cross
-        uses: actions/cache@v3
         if: matrix.target != 'x86_64-unknown-linux-gnu'
+        uses: actions/cache@v3
         with:
           path: ~/.cargo/.cross
           key: ${{ runner.os }}-cross-${{ matrix.target }}-${{ hashFiles('Cross.toml') }}
@@ -162,8 +162,8 @@ jobs:
             ${{ runner.os }}-arch-cargo-${{ matrix.target }}-
 
       - name: Cache cross
-        uses: actions/cache@v3
         if: matrix.target != 'x86_64-unknown-linux-gnu'
+        uses: actions/cache@v3
         with:
           path: ~/.cargo/.cross
           key: ${{ runner.os }}-arch-cross-${{ matrix.target }}-${{ hashFiles('Cross.arch.toml') }}

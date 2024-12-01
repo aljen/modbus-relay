@@ -1,5 +1,13 @@
 [target.aarch64-unknown-linux-gnu]
-pre-build = ["dpkg --add-architecture arm64 && apt-get update && apt-get install -y libudev-dev:arm64"]
+pre-build = [
+    "dpkg --add-architecture arm64",
+    "apt-get update",
+    "apt-get install -y libudev-dev:arm64"
+]
 
 [target.armv7-unknown-linux-gnueabihf]
-pre-build = ["dpkg --add-architecture armhf && apt-get update && apt-get install -y libudev-dev:armhf"]
+pre-build = [
+    "dpkg --add-architecture armhf",
+    "apt-get update",
+    "apt-get install -y libudev-dev:armhf"
+]
