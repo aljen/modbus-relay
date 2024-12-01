@@ -11,22 +11,19 @@ makedepends=('cargo' 'git')
 backup=('etc/modbus-relay/config.yaml')
 
 build() {
-  cd "$srcdir/$pkgname"
   cargo build --release
 }
 
 package() {
-  cd "$srcdir/$pkgname"
-  
   # Binary
   install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
-  
+
   # Config
   install -Dm644 "config/config.example.yaml" "$pkgdir/etc/$pkgname/config.yaml"
-  
+
   # Systemd service
   install -Dm644 "dist/arch/modbus-relay.service" "$pkgdir/usr/lib/systemd/system/$pkgname.service"
-  
+
   # Documentation
   install -Dm644 "README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
   install -Dm644 "LICENSE-MIT" "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
