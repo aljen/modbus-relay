@@ -21,7 +21,13 @@ exclude = [
   "benches/**/*",
 ]
 
-include = ["src/**/*", "LICENSE*", "README.md", "CHANGELOG.md"]
+include = [
+  "src/**/*",
+  "LICENSE*",
+  "README.md",
+  "CHANGELOG.md",
+  "config/config.example.yaml",
+]
 
 [badges]
 maintenance = { status = "actively-developed" }
