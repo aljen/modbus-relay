@@ -91,13 +91,20 @@ jobs:
       - name: Build
         env:
           PKG_CONFIG_ALLOW_CROSS: "1"
-          PKG_CONFIG_PATH: "/usr/lib/${{ matrix.target }}/pkgconfig"
-          PKG_CONFIG_SYSROOT_DIR: "/usr"
-          PKG_CONFIG_LIBDIR: "/usr/lib/${{ matrix.target }}/pkgconfig"
         run: |
           if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
+            # Native build uses standard system paths
             cargo build --release --target ${{ matrix.target }}
           else
+            # Cross compilation requires special paths
+            if [ "${{ matrix.target }}" = "armv7-unknown-linux-gnueabihf" ]; then
+              PKG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig"
+            elif [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+              PKG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig"
+            fi
+            PKG_CONFIG_PATH="$PKG_PATH" \
+            PKG_CONFIG_SYSROOT_DIR="/usr" \
+            PKG_CONFIG_LIBDIR="$PKG_PATH" \
             cross build --release --target ${{ matrix.target }}
           fi
 
