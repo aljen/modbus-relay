@@ -211,10 +211,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List files
+        run: |
+          ls -R artifacts/
+          echo "Files to be uploaded:"
+          find artifacts -type f -name "*.deb" -o -name "*.pkg.tar.zst"
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: deb-*/*.deb pkg-*/*.pkg.tar.zst
+          files: |
+            artifacts/**/*.deb
+            artifacts/**/*.pkg.tar.zst
           generate_release_notes: true
