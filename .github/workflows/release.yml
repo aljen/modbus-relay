@@ -186,7 +186,7 @@ jobs:
         run: |
           VERSION=$(grep -m1 'version =' Cargo.toml | cut -d '"' -f2)
           sed -i "s/pkgver=.*/pkgver=$VERSION/" dist/arch/PKGBUILD
-          mkdir -p /tmp/pkg/src
+          mkdir -p /tmp/pkg/{cargo,src}
           cp -r . /tmp/pkg/src/modbus-relay
           cp dist/arch/PKGBUILD /tmp/pkg
 
@@ -194,7 +194,7 @@ jobs:
         run: |
           cd /tmp/pkg
           chown -R nobody:nobody .
-          runuser -p -u nobody -g root -- makepkg -s --noconfirm
+          CARGO_HOME=/tmp/pkg/cargo runuser -p -u nobody -g root -- makepkg -s --noconfirm
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
