@@ -122,8 +122,11 @@ jobs:
             PKG_CONFIG_LIBDIR="$PKG_PATH" \
             cross build --release --target ${{ matrix.target }}
 
+            # Setup cargo config for cross-compilation strip
+            mkdir -p .cargo
+            cp dist/debian/cargo-config.toml .cargo/config.toml
+
             LD_LIBRARY_PATH="$LD_PATH" \
-            CARGO_CONFIG="dist/debian/cargo-config.toml" \
             cargo deb --no-build --target ${{ matrix.target }}
           fi
 
