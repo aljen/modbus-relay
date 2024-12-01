@@ -1,0 +1,5 @@
+[target.armv7-unknown-linux-gnueabihf]
+strip = { path = "arm-linux-gnueabihf-strip" }
+
+[target.aarch64-unknown-linux-gnu]
+strip = { path = "aarch64-linux-gnu-strip" }
