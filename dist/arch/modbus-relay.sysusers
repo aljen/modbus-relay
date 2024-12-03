@@ -1,0 +1,3 @@
+# Create modbus-relay system user and add to uucp group
+u modbus-relay - "Modbus TCP to RTU relay service" /nonexistent /usr/sbin/nologin
+m modbus-relay uucp

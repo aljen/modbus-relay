@@ -28,6 +28,9 @@ package() {
   # Systemd service
   install -Dm644 "dist/arch/modbus-relay.service" "$pkgdir/usr/lib/systemd/system/$pkgname.service"
 
+  # Systemd sysusers
+  install -Dm644 "dist/arch/modbus-relay.sysusers" "$pkgdir/usr/lib/sysusers.d/$pkgname.conf"
+
   # Documentation
   install -Dm644 "README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
   install -Dm644 "LICENSE-MIT" "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
