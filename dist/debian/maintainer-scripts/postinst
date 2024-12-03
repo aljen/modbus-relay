@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+# Create modbus-relay system user if it doesn't exist
+if ! getent passwd modbus-relay >/dev/null; then
+    useradd --system --no-create-home \
+        --home-dir /nonexistent \
+        --shell /usr/sbin/nologin \
+        modbus-relay
+fi
+
+# Add modbus-relay user to dialout group for serial port access
+usermod -aG dialout modbus-relay || true
+
+#DEBHELPER#
+
+exit 0

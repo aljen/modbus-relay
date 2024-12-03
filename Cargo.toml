@@ -137,3 +137,4 @@ assets = [
 ]
 conf-files = ["/etc/modbus-relay/config.yaml"]
 systemd-units = { unit-name = "modbus-relay" }
+maintainer-scripts = "dist/debian/maintainer-scripts"
