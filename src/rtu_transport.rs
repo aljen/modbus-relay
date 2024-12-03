@@ -15,9 +15,7 @@ use tracing::{info, trace};
 
 use crate::{RtsError, RtsType};
 
-use crate::{
-    guess_response_size, FrameErrorKind, IoOperation, RelayError, RtuConfig, TransportError,
-};
+use crate::{FrameErrorKind, IoOperation, RelayError, RtuConfig, TransportError};
 
 pub struct RtuTransport {
     port: Mutex<Box<dyn SerialPort>>,
@@ -99,7 +97,7 @@ impl RtuTransport {
         Ok(())
     }
 
-    fn set_rts(&self, on: bool) -> Result<(), TransportError> {
+    fn set_rts(&self, on: bool, trace_frames: bool) -> Result<(), TransportError> {
         let rts_span = tracing::info_span!(
             "rts_control",
             signal = if on { "HIGH" } else { "LOW" },
@@ -137,7 +135,9 @@ impl RtuTransport {
                 ))));
             }
 
-            info!("RTS set to {}", if on { "HIGH" } else { "LOW" });
+            if trace_frames {
+                trace!("RTS set to {}", if on { "HIGH" } else { "LOW" });
+            }
         }
 
         Ok(())
@@ -173,41 +173,12 @@ impl RtuTransport {
             ));
         }
 
+        let expected_size = response.len();
+
         if self.trace_frames {
             trace!("TX: {} bytes: {:02X?}", request.len(), request);
+            trace!("Expected response size: {} bytes", expected_size);
         }
-
-        let function = request.get(1).ok_or_else(|| {
-            RelayError::frame(
-                FrameErrorKind::InvalidFormat,
-                "Request too short to contain function code".to_string(),
-                Some(request.to_vec()),
-            )
-        })?;
-
-        let quantity = if *function == 0x03 || *function == 0x04 {
-            u16::from_be_bytes([
-                *request.get(4).ok_or_else(|| {
-                    RelayError::frame(
-                        FrameErrorKind::InvalidFormat,
-                        "Request too short for register quantity".to_string(),
-                        Some(request.to_vec()),
-                    )
-                })?,
-                *request.get(5).ok_or_else(|| {
-                    RelayError::frame(
-                        FrameErrorKind::InvalidFormat,
-                        "Request too short for register quantity".to_string(),
-                        Some(request.to_vec()),
-                    )
-                })?,
-            ])
-        } else {
-            1
-        };
-
-        let expected_size = guess_response_size(*function, quantity);
-        info!("Expected response size: {} bytes", expected_size);
 
         let transaction_start = Instant::now();
 
@@ -215,17 +186,27 @@ impl RtuTransport {
             let mut port = self.port.lock().await;
 
             if self.config.rts_type != RtsType::None {
-                info!("RTS -> TX mode");
-                self.set_rts(self.config.rts_type.to_signal_level(true))?;
+                if self.trace_frames {
+                    trace!("RTS -> TX mode");
+                }
+
+                self.set_rts(
+                    self.config.rts_type.to_signal_level(true),
+                    self.trace_frames,
+                )?;
 
                 if self.config.rts_delay_us > 0 {
-                    info!("RTS -> TX mode [waiting]");
+                    if self.trace_frames {
+                        trace!("RTS -> TX mode [waiting]");
+                    }
                     tokio::time::sleep(Duration::from_micros(self.config.rts_delay_us)).await;
                 }
             }
 
             // Write request
-            info!("Writing request");
+            if self.trace_frames {
+                trace!("Writing request");
+            }
             port.write_all(request).map_err(|e| TransportError::Io {
                 operation: IoOperation::Write,
                 details: "Failed to write request".to_string(),
@@ -239,22 +220,34 @@ impl RtuTransport {
             })?;
 
             if self.config.rts_type != RtsType::None {
-                info!("RTS -> RX mode");
-                self.set_rts(self.config.rts_type.to_signal_level(false))?;
+                if self.trace_frames {
+                    trace!("RTS -> RX mode");
+                }
+
+                self.set_rts(
+                    self.config.rts_type.to_signal_level(false),
+                    self.trace_frames,
+                )?;
             }
 
             if self.config.flush_after_write {
-                info!("RTS -> TX mode [flushing]");
+                if self.trace_frames {
+                    trace!("RTS -> TX mode [flushing]");
+                }
                 self.tc_flush()?;
             }
 
             if self.config.rts_type != RtsType::None && self.config.rts_delay_us > 0 {
-                info!("RTS -> RX mode [waiting]");
+                if self.trace_frames {
+                    trace!("RTS -> RX mode [waiting]");
+                }
                 tokio::time::sleep(Duration::from_micros(self.config.rts_delay_us)).await;
             }
 
             // Read response
-            trace!("Reading response (expecting {} bytes)", expected_size);
+            if self.trace_frames {
+                trace!("Reading response (expecting {} bytes)", expected_size);
+            }
 
             const MAX_TIMEOUTS: u8 = 3;
             let mut total_bytes = 0;
@@ -265,7 +258,6 @@ impl RtuTransport {
             while total_bytes < expected_size {
                 match port.read(&mut response[total_bytes..]) {
                     Ok(0) => {
-                        trace!("Zero bytes read");
                         if total_bytes > 0 {
                             let elapsed = last_read_time.elapsed();
                             if elapsed >= inter_byte_timeout {
@@ -276,22 +268,25 @@ impl RtuTransport {
                         tokio::task::yield_now().await;
                     }
                     Ok(n) => {
-                        trace!(
-                            "Read {} bytes: {:02X?}",
-                            n,
-                            &response[total_bytes..total_bytes + n]
-                        );
+                        if self.trace_frames {
+                            trace!(
+                                "Read {} bytes: {:02X?}",
+                                n,
+                                &response[total_bytes..total_bytes + n]
+                            );
+                        }
                         total_bytes += n;
                         last_read_time = tokio::time::Instant::now();
                         consecutive_timeouts = 0;
 
                         if total_bytes >= expected_size {
-                            trace!("Received complete response");
+                            if self.trace_frames {
+                                trace!("Received complete response");
+                            }
                             break;
                         }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                        trace!("Read timeout");
                         if total_bytes > 0 {
                             let elapsed = last_read_time.elapsed();
                             if elapsed >= inter_byte_timeout {
@@ -323,7 +318,6 @@ impl RtuTransport {
             }
 
             if total_bytes == 0 {
-                info!("No response received");
                 return Err(TransportError::NoResponse {
                     attempts: consecutive_timeouts,
                     elapsed: transaction_start.elapsed(),

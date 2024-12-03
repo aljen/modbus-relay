@@ -101,6 +101,76 @@ pub fn guess_response_size(function: u8, quantity: u16) -> usize {
     }
 }
 
+/// Extracts a 16-bit unsigned integer from a Modbus RTU request frame starting at the specified index.
+///
+/// This function attempts to retrieve two consecutive bytes from the provided request slice,
+/// starting at the given index, and converts them into a `u16` value using big-endian byte order.
+/// If the request slice is too short to contain the required bytes, it returns a `RelayError`
+/// indicating an invalid frame format.
+///
+/// # Arguments
+///
+/// * `request` - A slice of bytes representing the Modbus RTU request frame.
+/// * `start` - The starting index within the request slice from which to extract the `u16` value.
+///
+/// # Returns
+///
+/// A `Result` containing the extracted `u16` value if successful, or a `RelayError` if the request
+/// slice is too short.
+///
+/// # Errors
+///
+/// Returns a `RelayError` with `FrameErrorKind::InvalidFormat` if the request slice does not contain
+/// enough bytes to extract a `u16` value starting at the specified index.
+fn get_u16_from_request(request: &[u8], start: usize) -> Result<u16, RelayError> {
+    request
+        .get(start..start + 2)
+        .map(|bytes| u16::from_be_bytes([bytes[0], bytes[1]]))
+        .ok_or_else(|| {
+            RelayError::frame(
+                FrameErrorKind::InvalidFormat,
+                "Request too short for register quantity".to_string(),
+                Some(request.to_vec()),
+            )
+        })
+}
+
+/// Extracts the quantity of coils or registers from a Modbus RTU request frame based on the function code.
+///
+/// This function determines the quantity of coils or registers involved in a Modbus RTU request
+/// by examining the function code and extracting the appropriate bytes from the request frame.
+/// For read functions (0x01 to 0x04) and write multiple functions (0x0F, 0x10), it extracts a 16-bit
+/// unsigned integer from bytes 4 and 5 of the request frame. For write single functions (0x05, 0x06),
+/// it returns a fixed quantity of 1. For other function codes, it defaults to a quantity of 1.
+///
+/// # Arguments
+///
+/// * `function_code` - The Modbus function code.
+/// * `request` - A slice of bytes representing the Modbus RTU request frame.
+///
+/// # Returns
+///
+/// A `Result` containing the extracted quantity as a `u16` value if successful, or a `RelayError` if the request
+/// slice is too short or the function code is invalid.
+///
+/// # Errors
+///
+/// Returns a `RelayError` with `FrameErrorKind::InvalidFormat` if the request slice does not contain
+/// enough bytes to extract the quantity for the specified function code.
+pub fn get_quantity(function_code: u8, request: &[u8]) -> Result<u16, RelayError> {
+    match function_code {
+        // For read functions (0x01 to 0x04) and write multiple functions (0x0F, 0x10),
+        // extract the quantity from bytes 4 and 5 of the request frame.
+        0x01..=0x04 | 0x0F | 0x10 => get_u16_from_request(request, 4),
+
+        // For write single functions (0x05, 0x06), the quantity is always 1.
+        0x05 | 0x06 => Ok(1),
+
+        // For other function codes, default the quantity to 1.
+        _ => Ok(1),
+    }
+}
+
 pub struct ModbusProcessor {
     transport: Arc<RtuTransport>,
 }
@@ -147,11 +217,8 @@ impl ModbusProcessor {
 
         // Estimate the expected RTU response size
         let function_code = pdu.first().copied().unwrap_or(0);
-        let quantity = if pdu.len() >= 4 {
-            u16::from_be_bytes([pdu[2], pdu[3]])
-        } else {
-            0
-        };
+        let quantity = get_quantity(function_code, &rtu_request)?;
+
         let expected_response_size = guess_response_size(function_code, quantity);
 
         // Allocate buffer for RTU response
