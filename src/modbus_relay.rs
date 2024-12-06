@@ -467,12 +467,14 @@ async fn handle_client(
     manager: Arc<ConnectionManager>,
 ) -> Result<(), RelayError> {
     let start_time = Instant::now();
-    manager.record_request(peer_addr, true).await;
+
+    // Create connection guard to track this connection
+    let _guard = manager.accept_connection(peer_addr).await?;
 
     let result = handle_client_inner(stream, peer_addr, transport, manager.clone()).await;
 
     if result.is_err() {
-        manager.record_request(peer_addr, false).await;
+        manager.record_client_error(&peer_addr).await?;
     }
 
     manager.record_response_time(start_time.elapsed()).await;
