@@ -2,6 +2,7 @@ mod backoff_strategy;
 mod guard;
 mod manager;
 mod stats;
+mod events;
 
 pub use backoff_strategy::BackoffStrategy;
 pub use guard::ConnectionGuard;
@@ -9,6 +10,7 @@ pub use manager::Manager as ConnectionManager;
 pub use stats::ClientStats;
 pub use stats::ConnectionStats;
 pub use stats::IpStats;
+pub use events::StatEvent;
 
 #[cfg(test)]
 mod tests {
