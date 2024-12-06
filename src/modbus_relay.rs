@@ -23,6 +23,7 @@ pub struct ModbusRelay {
     config: RelayConfig,
     transport: Arc<RtuTransport>,
     connection_manager: Arc<ConnectionManager>,
+    stats_manager: Arc<ConnectionManager>,
     shutdown: broadcast::Sender<()>,
     main_shutdown: tokio::sync::watch::Sender<bool>,
     tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -37,6 +38,7 @@ impl ModbusRelay {
 
         // Initialize connection manager with connection config from RelayConfig
         let connection_manager = Arc::new(ConnectionManager::new(config.connection.clone()));
+        let stats_manager = Arc::new(ConnectionManager::new(config.connection.clone()));
 
         let (main_shutdown, _) = tokio::sync::watch::channel(false);
 
@@ -44,6 +46,7 @@ impl ModbusRelay {
             config,
             transport: Arc::new(transport),
             connection_manager,
+            stats_manager,
             shutdown: broadcast::channel(1).0,
             main_shutdown,
             tasks: Arc::new(Mutex::new(Vec::new())),
@@ -173,7 +176,7 @@ impl ModbusRelay {
         // Start HTTP server if enabled
         if self.config.http.enabled {
             let http_server = {
-                let manager = Arc::clone(&self.connection_manager);
+                let manager = Arc::clone(&self.stats_manager);
                 let rx = self.shutdown.subscribe();
                 let config = self.config.clone();
 
