@@ -1,55 +1,35 @@
-use std::{
-    collections::{HashMap, VecDeque},
-    net::SocketAddr,
-    sync::{
-        atomic::{AtomicU32, AtomicU64, Ordering},
-        Arc,
-    },
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
-use tokio::sync::{Mutex, Semaphore};
-use tracing::info;
+use tokio::sync::{mpsc, oneshot, Mutex, Semaphore};
+use tracing::{error, info};
 
 use crate::{config::ConnectionConfig, ConnectionError, RelayError};
 
-use super::{ClientStats, ConnectionGuard, ConnectionStats, IpStats};
+use super::{ConnectionGuard, ConnectionStats, StatEvent};
 
 /// TCP connection management
 #[derive(Debug)]
 pub struct Manager {
     /// Connection limit per IP
-    pub per_ip_semaphores: Arc<Mutex<HashMap<SocketAddr, Arc<Semaphore>>>>,
+    per_ip_semaphores: Arc<Mutex<HashMap<SocketAddr, Arc<Semaphore>>>>,
     /// Global connection limit
-    pub global_semaphore: Arc<Semaphore>,
-    /// Stats per IP
-    pub stats: Arc<Mutex<HashMap<SocketAddr, ClientStats>>>,
+    global_semaphore: Arc<Semaphore>,
+    /// Active connections counter per IP
+    active_connections: Arc<Mutex<HashMap<SocketAddr, usize>>>,
     /// Configuration
-    pub config: ConnectionConfig,
-    /// Counter of all connections
-    pub total_connections: Arc<AtomicU64>,
-    /// Total requests
-    pub total_requests: AtomicU64,
-    /// Error count
-    pub error_count: AtomicU32,
-    /// Start time
-    pub start_time: Instant,
-    /// Response times
-    pub response_times: Arc<Mutex<VecDeque<Duration>>>,
+    config: ConnectionConfig,
+    /// Stats event sender
+    stats_tx: mpsc::Sender<StatEvent>,
 }
 
 impl Manager {
-    pub fn new(config: ConnectionConfig) -> Self {
+    pub fn new(config: ConnectionConfig, stats_tx: mpsc::Sender<StatEvent>) -> Self {
         Self {
             per_ip_semaphores: Arc::new(Mutex::new(HashMap::new())),
             global_semaphore: Arc::new(Semaphore::new(config.max_connections as usize)),
-            stats: Arc::new(Mutex::new(HashMap::new())),
+            active_connections: Arc::new(Mutex::new(HashMap::new())),
             config,
-            total_connections: Arc::new(AtomicU64::new(0)),
-            total_requests: AtomicU64::new(0),
-            error_count: AtomicU32::new(0),
-            start_time: Instant::now(),
-            response_times: Arc::new(Mutex::new(VecDeque::with_capacity(100))),
+            stats_tx,
         }
     }
 
@@ -87,29 +67,17 @@ impl Manager {
                 ))
             })?;
 
-        // Update statistics
+        // Increment active connections counter
         {
-            let mut stats = self.stats.lock().await;
-            let client_stats = stats.entry(addr).or_insert_with(|| ClientStats {
-                active_connections: 0,
-                last_active: Instant::now(),
-                total_requests: 0,
-                error_count: 0,
-                last_error: None,
-            });
-
-            // Check for potential overflow
-            if client_stats.active_connections == usize::MAX {
-                return Err(RelayError::Connection(ConnectionError::invalid_state(
-                    "Active connections counter overflow".to_string(),
-                )));
-            }
-
-            client_stats.active_connections += 1;
-            client_stats.last_active = Instant::now();
+            let mut active_conns = self.active_connections.lock().await;
+            let conn_count = active_conns.entry(addr).or_default();
+            *conn_count = conn_count.saturating_add(1);
         }
 
-        self.total_connections.fetch_add(1, Ordering::Relaxed);
+        // Notify stats manager about new connection
+        if let Err(e) = self.stats_tx.send(StatEvent::ClientConnected(addr)).await {
+            error!("Failed to send connection event to stats manager: {}", e);
+        }
 
         Ok(ConnectionGuard {
             manager: Arc::clone(self),
@@ -120,205 +88,118 @@ impl Manager {
     }
 
     pub async fn close_all_connections(&self) -> Result<(), RelayError> {
-        let stats = self.stats.lock().await;
-        let active_connections = stats.values().map(|s| s.active_connections).sum::<usize>();
+        let active_conns = self.active_connections.lock().await;
+        let total_active: usize = active_conns.values().sum();
 
-        if active_connections > 0 {
-            info!("Closing {} active connections", active_connections);
-            // TODO(aljen): Here we can add code to forcefully close connections
-            // e.g., by sending a signal to all ConnectionGuard
+        if total_active > 0 {
+            info!("Closing {} active connections", total_active);
+            // TODO(aljen): Logic for force-closing connections should be added here
         }
 
         Ok(())
     }
 
-    pub async fn record_client_error(&self, addr: &SocketAddr) -> Result<(), RelayError> {
-        let mut stats = self.stats.lock().await;
-        let client_stats = stats.entry(*addr).or_insert_with(|| ClientStats {
-            active_connections: 0,
-            last_active: Instant::now(),
-            total_requests: 0,
-            error_count: 0,
-            last_error: None,
-        });
-
-        client_stats.error_count += 1;
-        client_stats.last_error = Some(Instant::now());
-
-        Ok(())
+    pub async fn get_connection_count(&self, addr: &SocketAddr) -> usize {
+        self.active_connections
+            .lock()
+            .await
+            .get(addr)
+            .copied()
+            .unwrap_or(0)
     }
 
-    /// Updates statistics for a given connection
-    pub async fn record_request(&self, addr: SocketAddr, success: bool) {
-        let mut stats = self.stats.lock().await;
-        if let Some(client_stats) = stats.get_mut(&addr) {
-            client_stats.total_requests += 1;
-            client_stats.last_active = Instant::now();
-            if !success {
-                client_stats.error_count += 1;
-                client_stats.last_error = Some(Instant::now());
-            }
+    pub async fn get_total_connections(&self) -> usize {
+        self.active_connections.lock().await.values().sum()
+    }
+
+    /// Updates statistics for a given request
+    pub async fn record_request(&self, addr: SocketAddr, success: bool, duration: Duration) {
+        if let Err(e) = self
+            .stats_tx
+            .send(StatEvent::RequestProcessed {
+                addr,
+                success,
+                duration_ms: duration.as_millis() as u64,
+            })
+            .await
+        {
+            error!("Failed to send request stats: {}", e);
         }
     }
 
-    fn should_cleanup_connection(
-        stats: &ClientStats,
-        now: Instant,
-        idle_timeout: Duration,
-        error_timeout: Duration,
-    ) -> bool {
-        now.duration_since(stats.last_active) >= idle_timeout
-            || (stats.error_count > 0
-                && now.duration_since(stats.last_error.unwrap_or(now)) >= error_timeout)
-    }
-
-    /// Cleans up idle connections
-    pub async fn cleanup_idle_connections(&self) -> Result<(), RelayError> {
-        let now = Instant::now();
-
-        // First pass: collect connections to clean
-        let to_clean: Vec<(SocketAddr, ClientStats)> = {
-            let stats = self.stats.lock().await;
-            stats
-                .iter()
-                .filter(|(_, s)| {
-                    Self::should_cleanup_connection(
-                        s,
-                        now,
-                        self.config.idle_timeout,
-                        self.config.error_timeout,
-                    )
-                })
-                .map(|(addr, s)| (*addr, (*s).clone()))
-                .collect()
-        }; // stats lock is dropped here
-
-        // Second pass: verify and cleanup
-        for (addr, stats_snapshot) in to_clean {
-            let mut stats = self.stats.lock().await;
-            // Recheck conditions before cleanup
-            if Self::should_cleanup_connection(
-                &stats_snapshot,
-                now,
-                self.config.idle_timeout,
-                self.config.error_timeout,
-            ) {
-                stats.remove(&addr);
-                info!(
-                    "Cleaned up connection {} ({} connections, {} errors, last active: {:?} ago)",
-                    addr,
-                    stats_snapshot.active_connections,
-                    stats_snapshot.error_count,
-                    now.duration_since(stats_snapshot.last_active)
-                );
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Returns connection statistics
+    /// Gets complete connection statistics
     pub async fn get_stats(&self) -> Result<ConnectionStats, RelayError> {
-        let stats = self.stats.lock().await;
-        let mut total_active: usize = 0;
-        let mut total_requests: u64 = 0;
-        let mut total_errors: u64 = 0;
-        let mut per_ip_stats = HashMap::new();
+        let (tx, rx) = oneshot::channel();
 
-        for (addr, client_stats) in stats.iter() {
-            // Check for counter overflow
-            if total_active
-                .checked_add(client_stats.active_connections)
-                .is_none()
-            {
-                return Err(RelayError::Connection(ConnectionError::invalid_state(
-                    "Total active connections counter overflow".to_string(),
-                )));
-            }
-            total_active += client_stats.active_connections;
+        self.stats_tx
+            .send(StatEvent::QueryConnectionStats { response_tx: tx })
+            .await
+            .map_err(|_| {
+                RelayError::Connection(ConnectionError::invalid_state(
+                    "Failed to query connection stats",
+                ))
+            })?;
 
-            if total_requests
-                .checked_add(client_stats.total_requests)
-                .is_none()
-            {
-                return Err(RelayError::Connection(ConnectionError::invalid_state(
-                    "Total requests counter overflow".to_string(),
-                )));
-            }
-            total_requests += client_stats.total_requests;
-
-            if total_errors.checked_add(client_stats.error_count).is_none() {
-                return Err(RelayError::Connection(ConnectionError::invalid_state(
-                    "Total errors counter overflow".to_string(),
-                )));
-            }
-            total_errors += client_stats.error_count;
-
-            per_ip_stats.insert(
-                *addr,
-                IpStats {
-                    active_connections: client_stats.active_connections,
-                    total_requests: client_stats.total_requests,
-                    error_count: client_stats.error_count,
-                    last_active: client_stats.last_active,
-                    last_error: client_stats.last_error,
-                },
-            );
-        }
-
-        Ok(ConnectionStats {
-            total_connections: self.total_connections.load(Ordering::Relaxed),
-            active_connections: total_active,
-            total_requests,
-            total_errors,
-            per_ip_stats,
+        rx.await.map_err(|_| {
+            RelayError::Connection(ConnectionError::invalid_state(
+                "Failed to receive connection stats",
+            ))
         })
     }
 
-    pub async fn connection_count(&self) -> u32 {
-        self.stats.lock().await.len() as u32
+    /// Cleans up idle connections
+    pub(crate) async fn cleanup_idle_connections(&self) -> Result<(), RelayError> {
+        // Cleanup is now handled by StatsManager, we just need to sync our active connections
+        let (tx, rx) = oneshot::channel();
+
+        self.stats_tx
+            .send(StatEvent::QueryConnectionStats { response_tx: tx })
+            .await
+            .map_err(|_| {
+                RelayError::Connection(ConnectionError::invalid_state(
+                    "Failed to query stats for cleanup",
+                ))
+            })?;
+
+        let stats = rx.await.map_err(|_| {
+            RelayError::Connection(ConnectionError::invalid_state(
+                "Failed to receive stats for cleanup",
+            ))
+        })?;
+
+        let mut active_conns = self.active_connections.lock().await;
+        active_conns.retain(|addr, count| {
+            if let Some(ip_stats) = stats.per_ip_stats.get(addr) {
+                ip_stats.active_connections > 0
+            } else {
+                // If no stats exist, connection is considered inactive
+                *count == 0
+            }
+        });
+
+        Ok(())
     }
 
-    pub fn total_requests(&self) -> u64 {
-        self.total_requests.load(Ordering::Relaxed)
-    }
-
-    pub fn error_count(&self) -> u32 {
-        self.error_count.load(Ordering::Relaxed)
-    }
-
-    pub async fn avg_response_time(&self) -> Duration {
-        let times = self.response_times.lock().await;
-        if times.is_empty() {
-            return Duration::from_millis(0);
+    pub(crate) async fn decrease_connection_count(&self, addr: SocketAddr) {
+        let mut active_conns = self.active_connections.lock().await;
+        if let Some(count) = active_conns.get_mut(&addr) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                active_conns.remove(&addr);
+            }
         }
-        let sum: Duration = times.iter().sum();
-        sum / times.len() as u32
-    }
 
-    pub fn requests_per_second(&self) -> f64 {
-        let total = self.total_requests.load(Ordering::Relaxed) as f64;
-        let elapsed = self.start_time.elapsed().as_secs_f64();
-        if elapsed > 0.0 {
-            total / elapsed
-        } else {
-            0.0
+        // Notify stats manager about disconnection
+        if let Err(e) = self
+            .stats_tx
+            .send(StatEvent::ClientDisconnected(addr))
+            .await
+        {
+            error!("Failed to send disconnection event to stats manager: {}", e);
         }
     }
 
-    pub fn record_requests(&self) {
-        self.total_requests.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn record_errors(&self) {
-        self.error_count.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub async fn record_response_time(&self, duration: Duration) {
-        let mut times = self.response_times.lock().await;
-        if times.len() >= 100 {
-            times.pop_front();
-        }
-        times.push_back(duration);
+    pub fn stats_tx(&self) -> mpsc::Sender<StatEvent> {
+        self.stats_tx.clone()
     }
 }

@@ -1,5 +1,4 @@
 use std::{net::SocketAddr, sync::Arc};
-
 use tokio::sync::OwnedSemaphorePermit;
 use tracing::debug;
 
@@ -16,20 +15,13 @@ pub struct ConnectionGuard {
 
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
-        let manager = Arc::clone(&self.manager);
+        let manager = self.manager.clone();
         let addr = self.addr;
 
         debug!("Closing connection from {}", addr);
 
         tokio::spawn(async move {
-            let mut stats = manager.stats.lock().await;
-            if let Some(client_stats) = stats.get_mut(&addr) {
-                client_stats.active_connections -= 1;
-                debug!(
-                    "Connection from {} closed, active connections: {}",
-                    addr, client_stats.active_connections
-                );
-            }
+            manager.decrease_connection_count(addr).await;
         });
     }
 }

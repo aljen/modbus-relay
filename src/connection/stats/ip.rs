@@ -1,10 +1,14 @@
-use std::time::Instant;
+use std::time::SystemTime;
 
-#[derive(Debug)]
+use serde::Serialize;
+
+/// Stats for a single IP address
+#[derive(Debug, Clone, Serialize)]
 pub struct Stats {
     pub active_connections: usize,
     pub total_requests: u64,
-    pub error_count: u64,
-    pub last_active: Instant,
-    pub last_error: Option<Instant>,
+    pub total_errors: u64,
+    pub last_active: SystemTime,
+    pub last_error: Option<SystemTime>,
+    pub avg_response_time_ms: u64,
 }

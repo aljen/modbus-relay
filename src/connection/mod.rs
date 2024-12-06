@@ -1,31 +1,35 @@
 mod backoff_strategy;
+mod events;
 mod guard;
 mod manager;
 mod stats;
-mod events;
 
 pub use backoff_strategy::BackoffStrategy;
+pub use events::StatEvent;
 pub use guard::ConnectionGuard;
 pub use manager::Manager as ConnectionManager;
 pub use stats::ClientStats;
 pub use stats::ConnectionStats;
 pub use stats::IpStats;
-pub use events::StatEvent;
 
 #[cfg(test)]
 mod tests {
-    use tokio::time::sleep;
+    use tokio::{
+        sync::{broadcast, mpsc, Mutex},
+        time::sleep,
+    };
 
     use crate::{
         config::{BackoffConfig, ConnectionConfig},
-        ConnectionError, RelayError,
+        ConnectionError, RelayError, StatsConfig, StatsManager,
     };
 
     use super::*;
     use std::{
+        collections::HashMap,
         net::{IpAddr, Ipv4Addr, SocketAddr},
         sync::Arc,
-        time::{Duration, Instant},
+        time::Duration,
     };
 
     #[tokio::test]
@@ -39,7 +43,8 @@ mod tests {
             backoff: BackoffConfig::default(),
         };
 
-        let manager = Arc::new(ConnectionManager::new(config));
+        let (stats_tx, _) = mpsc::channel(100);
+        let manager = Arc::new(ConnectionManager::new(config, stats_tx));
         let addr1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 1234);
 
         // First connection should succeed
@@ -69,7 +74,22 @@ mod tests {
             ..Default::default()
         };
 
-        let manager = Arc::new(ConnectionManager::new(config));
+        let stats_config = StatsConfig::default();
+
+        let (stats_manager, stats_tx) = StatsManager::new(stats_config);
+        let stats_manager = Arc::new(Mutex::new(stats_manager));
+
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+
+        let stats_handle = tokio::spawn({
+            async move {
+                let mut stats_manager = stats_manager.lock().await;
+                stats_manager.run(shutdown_rx).await;
+            }
+        });
+
+        let manager = Arc::new(ConnectionManager::new(config, stats_tx));
+
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 1234);
 
         // First connection succeeds
@@ -79,7 +99,8 @@ mod tests {
         let _err = manager.accept_connection(addr).await.unwrap_err();
 
         // Check stats
-        let stats = manager.get_stats().await.unwrap(); // Unwrap Result
+        let stats = manager.get_stats().await.unwrap();
+
         assert_eq!(
             stats.active_connections, 1,
             "Should have one active connection"
@@ -91,20 +112,9 @@ mod tests {
 
         // Cleanup
         drop(conn);
-    }
 
-    #[tokio::test]
-    async fn test_error_recording() {
-        let manager = Arc::new(ConnectionManager::new(ConnectionConfig::default()));
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 1234);
-
-        // Record some errors
-        assert!(manager.record_client_error(&addr).await.is_ok());
-
-        // Verify error was recorded
-        let stats = manager.get_stats().await.unwrap();
-        assert_eq!(stats.total_errors, 1);
-        assert!(stats.per_ip_stats.get(&addr).unwrap().error_count == 1);
+        shutdown_tx.send(()).unwrap();
+        stats_handle.await.unwrap();
     }
 
     #[tokio::test]
@@ -114,7 +124,26 @@ mod tests {
             ..Default::default()
         };
 
-        let manager = Arc::new(ConnectionManager::new(config));
+        let stats_config = StatsConfig {
+            cleanup_interval: config.idle_timeout,
+            idle_timeout: config.idle_timeout,
+            error_timeout: config.error_timeout,
+            max_events_per_second: 10000, // TODO(aljen): Make configurable
+        };
+
+        let (stats_manager, stats_tx) = StatsManager::new(stats_config);
+        let stats_manager = Arc::new(Mutex::new(stats_manager));
+
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+
+        let stats_handle = tokio::spawn({
+            async move {
+                let mut stats_manager = stats_manager.lock().await;
+                stats_manager.run(shutdown_rx).await;
+            }
+        });
+
+        let manager = Arc::new(ConnectionManager::new(config, stats_tx));
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 1234);
 
         // Create a connection
@@ -133,37 +162,36 @@ mod tests {
         // Verify connection was cleaned up
         let stats = manager.get_stats().await.unwrap();
         assert_eq!(stats.active_connections, 0);
-    }
 
-    #[tokio::test]
-    async fn test_stats_counter_overflow() {
-        let manager = Arc::new(ConnectionManager::new(ConnectionConfig::default()));
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 1234);
-
-        // Manually set counters to near max to test overflow protection
-        {
-            let mut stats = manager.stats.lock().await;
-            let client_stats = stats.entry(addr).or_insert_with(|| ClientStats {
-                active_connections: usize::MAX,
-                last_active: Instant::now(),
-                total_requests: u64::MAX,
-                error_count: u64::MAX,
-                last_error: None,
-            });
-            client_stats.active_connections = usize::MAX;
-        }
-
-        // Attempting to increment should result in error
-        let result = manager.accept_connection(addr).await;
-        assert!(matches!(
-            result.unwrap_err(),
-            RelayError::Connection(ConnectionError::InvalidState(_))
-        ));
+        shutdown_tx.send(()).unwrap();
+        stats_handle.await.unwrap();
     }
 
     #[tokio::test]
     async fn test_connection_guard_cleanup() {
-        let manager = Arc::new(ConnectionManager::new(ConnectionConfig::default()));
+        let config = ConnectionConfig::default();
+
+        let stats_config = StatsConfig {
+            cleanup_interval: config.idle_timeout,
+            idle_timeout: config.idle_timeout,
+            error_timeout: config.error_timeout,
+            max_events_per_second: 10000, // TODO(aljen): Make configurable
+        };
+
+        let (stats_manager, stats_tx) = StatsManager::new(stats_config);
+        let stats_manager = Arc::new(Mutex::new(stats_manager));
+
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+
+        let stats_handle = tokio::spawn({
+            async move {
+                let mut stats_manager = stats_manager.lock().await;
+                stats_manager.run(shutdown_rx).await;
+            }
+        });
+
+        let manager = Arc::new(ConnectionManager::new(config, stats_tx));
+
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 1234);
 
         {
@@ -180,6 +208,9 @@ mod tests {
 
         let stats = manager.get_stats().await.unwrap();
         assert_eq!(stats.active_connections, 0);
+
+        shutdown_tx.send(()).unwrap();
+        stats_handle.await.unwrap();
     }
 
     #[tokio::test]
@@ -204,5 +235,47 @@ mod tests {
         // After reset, it should start from the beginning
         strategy.reset();
         assert_eq!(strategy.next_backoff().unwrap().as_millis(), 100);
+    }
+
+    #[tokio::test]
+    async fn test_connection_lifecycle() {
+        let config = ConnectionConfig::default();
+        let (stats_tx, mut stats_rx) = mpsc::channel(100);
+        let manager = Arc::new(ConnectionManager::new(config, stats_tx));
+
+        // Handle stats events in background
+        tokio::spawn(async move {
+            while let Some(event) = stats_rx.recv().await {
+                match event {
+                    StatEvent::QueryConnectionStats { response_tx } => {
+                        let _ = response_tx.send(ConnectionStats {
+                            total_connections: 1,
+                            active_connections: 1,
+                            total_requests: 0,
+                            total_errors: 0,
+                            requests_per_second: 0.0,
+                            avg_response_time_ms: 0,
+                            per_ip_stats: HashMap::new(),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        let addr = "127.0.0.1:8080".parse().unwrap();
+
+        // Test connection acceptance
+        let guard = manager.accept_connection(addr).await.unwrap();
+        assert_eq!(manager.get_connection_count(&addr).await, 1);
+
+        // Test statistics
+        let stats = manager.get_stats().await.unwrap();
+        assert_eq!(stats.active_connections, 1);
+
+        // Test connection cleanup
+        drop(guard);
+        sleep(Duration::from_millis(100)).await;
+        assert_eq!(manager.get_connection_count(&addr).await, 0);
     }
 }

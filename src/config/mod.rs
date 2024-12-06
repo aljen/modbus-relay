@@ -4,6 +4,7 @@ mod http;
 mod logging;
 mod relay;
 mod rtu;
+mod stats;
 mod tcp;
 mod types;
 
@@ -13,5 +14,6 @@ pub use http::Config as HttpConfig;
 pub use logging::Config as LoggingConfig;
 pub use relay::Config as RelayConfig;
 pub use rtu::Config as RtuConfig;
+pub use stats::Config as StatsConfig;
 pub use tcp::Config as TcpConfig;
 pub use types::{DataBits, Parity, RtsType, StopBits};
