@@ -350,7 +350,6 @@ impl ModbusRelay {
 async fn read_frame(
     reader: &mut tokio::net::tcp::ReadHalf<'_>,
     peer_addr: SocketAddr,
-    manager: &ConnectionManager,
 ) -> Result<(Vec<u8>, [u8; 2]), RelayError> {
     let mut tcp_buf = vec![0u8; 256];
 
@@ -509,7 +508,7 @@ async fn handle_client_inner(
         let frame_start = Instant::now();
 
         // 1. Read frame
-        let (frame, transaction_id) = match read_frame(&mut reader, peer_addr, &manager).await {
+        let (frame, transaction_id) = match read_frame(&mut reader, peer_addr).await {
             Ok((frame, id)) => (frame, id),
             Err(RelayError::Connection(ConnectionError::Disconnected)) => {
                 info!("Client {} disconnected", peer_addr);
