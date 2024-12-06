@@ -39,17 +39,13 @@ pub fn setup_logging(config: Option<&RelayConfig>) -> Result<(), RelayError> {
         time::format_description::well_known::Rfc3339,
     );
 
-    // Build initial subscriber
-    let layer = tracing_subscriber::fmt::layer()
-        .with_target(false)
-        .with_thread_ids(true)
-        .with_thread_names(true)
-        .with_timer(timer);
+    // Configure log level filter
+    let mut env_filter = EnvFilter::default();
 
-    // Configure based on config or defaults
-    let layer = if let Some(cfg) = config {
-        let mut env_filter =
-            EnvFilter::default().add_directive(cfg.logging.get_level_filter().into());
+    // Configure based on config
+    let include_location = if let Some(cfg) = config {
+        // Use configured log level
+        env_filter = env_filter.add_directive(cfg.logging.get_level_filter().into());
 
         if cfg.logging.trace_frames {
             env_filter = env_filter
@@ -57,21 +53,23 @@ pub fn setup_logging(config: Option<&RelayConfig>) -> Result<(), RelayError> {
                 .add_directive("modbus_relay::transport=trace".parse().unwrap());
         }
 
-        layer
-            .with_file(cfg.logging.include_location)
-            .with_line_number(cfg.logging.include_location)
-            .with_level(true)
-            .with_filter(env_filter)
+        cfg.logging.include_location
     } else {
-        // Default trace-level logging for startup
-        let env_filter = EnvFilter::default().add_directive(LevelFilter::TRACE.into());
-
-        layer
-            .with_file(true)
-            .with_line_number(true)
-            .with_level(true)
-            .with_filter(env_filter)
+        // Use INFO level for startup
+        env_filter = env_filter.add_directive(LevelFilter::INFO.into());
+        true
     };
+
+    // Build subscriber with all configuration
+    let layer = tracing_subscriber::fmt::layer()
+        .with_target(false)
+        .with_thread_ids(true)
+        .with_thread_names(true)
+        .with_timer(timer)
+        .with_file(include_location)
+        .with_line_number(include_location)
+        .with_level(true)
+        .with_filter(env_filter);
 
     let subscriber = Registry::default().with(layer);
 
