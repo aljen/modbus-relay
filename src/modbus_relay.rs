@@ -361,7 +361,6 @@ async fn read_frame(
         }
         Ok(Ok(n)) => {
             if n < 7 {
-                manager.record_request(peer_addr, false).await;
                 return Err(RelayError::frame(
                     FrameErrorKind::TooShort,
                     format!("Frame too short: {} bytes", n),
@@ -371,13 +370,11 @@ async fn read_frame(
             n
         }
         Ok(Err(e)) => {
-            manager.record_request(peer_addr, false).await;
             return Err(RelayError::Connection(ConnectionError::InvalidState(
                 format!("Connection lost: {}", e),
             )));
         }
         Err(_) => {
-            manager.record_request(peer_addr, false).await;
             return Err(RelayError::Connection(ConnectionError::Timeout(
                 "Read operation timed out".to_string(),
             )));
@@ -394,7 +391,6 @@ async fn read_frame(
     let transaction_id = [tcp_buf[0], tcp_buf[1]];
     let protocol_id = u16::from_be_bytes([tcp_buf[2], tcp_buf[3]]);
     if protocol_id != 0 {
-        manager.record_request(peer_addr, false).await;
         return Err(RelayError::protocol(
             ProtocolErrorKind::InvalidProtocolId,
             format!("Invalid protocol ID: {}", protocol_id),
@@ -403,7 +399,6 @@ async fn read_frame(
 
     let length = u16::from_be_bytes([tcp_buf[4], tcp_buf[5]]) as usize;
     if length > 249 {
-        manager.record_request(peer_addr, false).await;
         return Err(RelayError::frame(
             FrameErrorKind::TooLong,
             format!("Frame too long: {} bytes", length),
@@ -412,7 +407,6 @@ async fn read_frame(
     }
 
     if length + 6 != n {
-        manager.record_request(peer_addr, false).await;
         return Err(RelayError::frame(
             FrameErrorKind::InvalidFormat,
             format!("Invalid frame length, expected {}, got {}", length + 6, n),
@@ -512,6 +506,8 @@ async fn handle_client_inner(
     let modbus = ModbusProcessor::new(transport);
 
     loop {
+        let frame_start = Instant::now();
+
         // 1. Read frame
         let (frame, transaction_id) = match read_frame(&mut reader, peer_addr, &manager).await {
             Ok((frame, id)) => (frame, id),
@@ -519,13 +515,29 @@ async fn handle_client_inner(
                 info!("Client {} disconnected", peer_addr);
                 break;
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                // Record TCP frame error
+                manager.record_errors();
+                manager.record_request(peer_addr, false).await;
+                manager.record_response_time(frame_start.elapsed()).await;
+                return Err(e);
+            }
         };
 
         // 2. Process frame
         let response = match process_frame(&modbus, &frame, transaction_id).await {
-            Ok(response) => response,
+            Ok(response) => {
+                // Record successful Modbus request
+                manager.record_requests();
+                manager.record_request(peer_addr, true).await;
+                manager.record_response_time(frame_start.elapsed()).await;
+                response
+            }
             Err(e) => {
+                // Record failed Modbus request
+                manager.record_errors();
+                manager.record_request(peer_addr, false).await;
+                manager.record_response_time(frame_start.elapsed()).await;
                 return Err(e);
             }
         };
