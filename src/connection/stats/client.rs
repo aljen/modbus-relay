@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 /// Stats for a single client
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Stats {
     /// Number of active connections from this address
     pub active_connections: usize,

@@ -9,9 +9,12 @@ use super::BackoffConfig;
 pub struct Config {
     /// Maximum number of concurrent connections
     pub max_connections: u64,
-    /// Timeout for idle connections
+    /// Time after which an idle connection will be closed
     #[serde(with = "humantime_serde")]
     pub idle_timeout: Duration,
+    /// Time after which a connection with errors will be closed
+    #[serde(with = "humantime_serde")]
+    pub error_timeout: Duration,
     /// Timeout for establishing a connection
     #[serde(with = "humantime_serde")]
     pub connect_timeout: Duration,
@@ -26,6 +29,7 @@ impl Default for Config {
         Self {
             max_connections: 100,
             idle_timeout: Duration::from_secs(60),
+            error_timeout: Duration::from_secs(300),
             connect_timeout: Duration::from_secs(5),
             per_ip_limits: Some(10),
             backoff: BackoffConfig {

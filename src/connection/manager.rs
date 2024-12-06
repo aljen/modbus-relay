@@ -161,30 +161,56 @@ impl Manager {
         }
     }
 
+    fn should_cleanup_connection(
+        stats: &ClientStats,
+        now: Instant,
+        idle_timeout: Duration,
+        error_timeout: Duration,
+    ) -> bool {
+        now.duration_since(stats.last_active) >= idle_timeout
+            || (stats.error_count > 0
+                && now.duration_since(stats.last_error.unwrap_or(now)) >= error_timeout)
+    }
+
     /// Cleans up idle connections
     pub async fn cleanup_idle_connections(&self) -> Result<(), RelayError> {
         let now = Instant::now();
-        let to_clean = {
+
+        // First pass: collect connections to clean
+        let to_clean: Vec<(SocketAddr, ClientStats)> = {
             let stats = self.stats.lock().await;
             stats
                 .iter()
-                .filter(|(_, s)| now.duration_since(s.last_active) >= self.config.idle_timeout)
-                .map(|(addr, s)| (*addr, s.active_connections))
-                .collect::<Vec<_>>()
-        };
+                .filter(|(_, s)| {
+                    Self::should_cleanup_connection(
+                        s,
+                        now,
+                        self.config.idle_timeout,
+                        self.config.error_timeout,
+                    )
+                })
+                .map(|(addr, s)| (*addr, (*s).clone()))
+                .collect()
+        }; // stats lock is dropped here
 
-        // Separately for each connection
-        for (addr, conn_count) in to_clean {
+        // Second pass: verify and cleanup
+        for (addr, stats_snapshot) in to_clean {
             let mut stats = self.stats.lock().await;
-            if let Some(current) = stats.get(&addr) {
-                // Sprawdź czy stan się nie zmienił
-                if now.duration_since(current.last_active) >= self.config.idle_timeout {
-                    stats.remove(&addr);
-                    info!(
-                        "Cleaned up idle connection {} ({} connections)",
-                        addr, conn_count
-                    );
-                }
+            // Recheck conditions before cleanup
+            if Self::should_cleanup_connection(
+                &stats_snapshot,
+                now,
+                self.config.idle_timeout,
+                self.config.error_timeout,
+            ) {
+                stats.remove(&addr);
+                info!(
+                    "Cleaned up connection {} ({} connections, {} errors, last active: {:?} ago)",
+                    addr,
+                    stats_snapshot.active_connections,
+                    stats_snapshot.error_count,
+                    now.duration_since(stats_snapshot.last_active)
+                );
             }
         }
 

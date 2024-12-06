@@ -17,6 +17,8 @@ use crate::rtu_transport::RtuTransport;
 use crate::utils::generate_request_id;
 use crate::{ConnectionManager, IoOperation, ModbusProcessor, RelayConfig};
 
+use socket2::{SockRef, TcpKeepalive};
+
 pub struct ModbusRelay {
     config: RelayConfig,
     transport: Arc<RtuTransport>,
@@ -58,6 +60,49 @@ impl ModbusRelay {
         let _ = self.tasks.try_lock().map(|mut guard| guard.push(task));
     }
 
+    async fn configure_tcp_stream(
+        socket: &TcpStream,
+        keep_alive_duration: Duration,
+    ) -> Result<(), RelayError> {
+        // Configure TCP socket using SockRef
+        let sock_ref = SockRef::from(&socket);
+
+        // Enable TCP keepalive
+        sock_ref.set_keepalive(true).map_err(|e| {
+            RelayError::Transport(TransportError::Io {
+                operation: IoOperation::Configure,
+                details: "Failed to enable TCP keepalive".to_string(),
+                source: e,
+            })
+        })?;
+
+        // Set TCP_NODELAY
+        sock_ref.set_nodelay(true).map_err(|e| {
+            RelayError::Transport(TransportError::Io {
+                operation: IoOperation::Configure,
+                details: "Failed to set TCP_NODELAY".to_string(),
+                source: e,
+            })
+        })?;
+
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let mut ka = TcpKeepalive::new();
+            ka = ka.with_time(keep_alive_duration);
+            ka = ka.with_interval(keep_alive_duration);
+
+            sock_ref.set_tcp_keepalive(&ka).map_err(|e| {
+                RelayError::Transport(TransportError::Io {
+                    operation: IoOperation::Configure,
+                    details: "Failed to set TCP keepalive parameters".to_string(),
+                    source: e,
+                })
+            })?;
+        }
+
+        Ok(())
+    }
+
     pub async fn run(self: Arc<Self>) -> Result<(), RelayError> {
         let mut tasks = Vec::new();
 
@@ -67,6 +112,7 @@ impl ModbusRelay {
             let manager = Arc::clone(&self.connection_manager);
             let mut rx = self.shutdown.subscribe();
             let config = self.config.clone();
+            let keep_alive_duration = self.config.tcp.keep_alive;
 
             tokio::spawn(async move {
                 let addr = format!("{}:{}", config.tcp.bind_addr, config.tcp.bind_port);
@@ -88,6 +134,19 @@ impl ModbusRelay {
                                     let transport = Arc::clone(&transport);
                                     let manager = Arc::clone(&manager);
 
+                                    Self::configure_tcp_stream(&socket, keep_alive_duration)
+                                        .await
+                                        .map_err(|e| {
+                                            error!("Failed to configure TCP stream: {}", e);
+                                        })
+                                        .map(|_| {
+                                            debug!(
+                                                "TCP stream configured with keepalive: {:?}",
+                                                keep_alive_duration
+                                            )
+                                        })
+                                        .ok();
+
                                     tokio::spawn(async move {
                                         if let Err(e) = handle_client(socket, peer, transport, manager).await {
                                             error!("Client error: {}", e);
@@ -100,7 +159,7 @@ impl ModbusRelay {
                             }
                         }
                         _ = rx.recv() => {
-                            info!("TCP server shutting down");
+                            info!("MODBUS TCP server shutting down");
                             break;
                         }
                     }
@@ -436,14 +495,6 @@ async fn handle_client_inner(
         protocol = "modbus_tcp"
     );
     let _enter = client_span.enter();
-
-    stream.set_nodelay(true).map_err(|e| {
-        RelayError::Transport(TransportError::Io {
-            operation: IoOperation::Configure,
-            details: "Failed to set TCP_NODELAY".to_string(),
-            source: e,
-        })
-    })?;
 
     let addr = stream.peer_addr().map_err(|e| {
         RelayError::Transport(TransportError::Io {

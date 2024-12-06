@@ -32,6 +32,7 @@ mod tests {
             max_connections: 2,
             per_ip_limits: Some(1),
             idle_timeout: Duration::from_secs(60),
+            error_timeout: Duration::from_secs(300),
             connect_timeout: Duration::from_secs(5),
             backoff: BackoffConfig::default(),
         };

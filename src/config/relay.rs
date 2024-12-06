@@ -267,7 +267,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use std::{fs, time::Duration};
     use tempfile::tempdir;
 
     #[test]
@@ -299,6 +299,7 @@ mod tests {
             tcp:
               bind_port: 9000
               bind_addr: "192.168.1.100"
+              keep_alive: "60s"
             "#,
         )
         .unwrap();
@@ -306,6 +307,7 @@ mod tests {
         let config = Config::from_file(config_path).unwrap();
         assert_eq!(config.tcp.bind_port, 9000);
         assert_eq!(config.tcp.bind_addr, "192.168.1.100");
+        assert_eq!(config.tcp.keep_alive, Duration::from_secs(60));
     }
 
     #[test]

@@ -5,6 +5,9 @@ tcp:
   bind_addr: "127.0.0.1"
   # TCP server port
   bind_port: 502
+  # TCP keepalive probe interval (e.g. "60s", "2m")
+  # This is how often the server will check if client connections are still alive
+  keep_alive: "60s"
 
 rtu:
   # Serial device path
@@ -54,8 +57,10 @@ logging:
 connection:
   # Maximum number of concurrent connections
   max_connections: 100
-  # Timeout for idle connections
+  # Time after which an idle connection will be closed
   idle_timeout: "60s"
+  # Time after which a connection with errors will be closed
+  error_timeout: "300s"
   # Timeout for establishing a connection
   connect_timeout: "5s"
   # Optional per IP limits

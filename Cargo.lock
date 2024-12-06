@@ -882,6 +882,7 @@ dependencies = [
  "serde_yaml",
  "serial_test",
  "serialport",
+ "socket2",
  "tempdir",
  "tempfile",
  "thiserror 2.0.3",
