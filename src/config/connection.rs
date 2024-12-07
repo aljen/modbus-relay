@@ -6,6 +6,7 @@ use super::BackoffConfig;
 
 /// Configuration for managing connections
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     /// Maximum number of concurrent connections
     pub max_connections: u64,

@@ -8,25 +8,21 @@ use super::{ConnectionConfig, HttpConfig, LoggingConfig, RtuConfig, TcpConfig};
 
 /// Main application configuration
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     /// TCP server configuration
-    #[serde(default)]
     pub tcp: TcpConfig,
 
     /// RTU client configuration
-    #[serde(default)]
     pub rtu: RtuConfig,
 
     /// HTTP API configuration
-    #[serde(default)]
     pub http: HttpConfig,
 
     /// Logging configuration
-    #[serde(default)]
     pub logging: LoggingConfig,
 
     /// Connection management configuration
-    #[serde(default)]
     pub connection: ConnectionConfig,
 }
 
@@ -81,12 +77,14 @@ impl Config {
             .set_default("http.metrics_enabled", defaults.http.metrics_enabled)?
             // Logging configuration
             .set_default("logging.trace_frames", defaults.logging.trace_frames)?
-            .set_default("logging.log_level", defaults.logging.log_level)?
+            .set_default("logging.level", defaults.logging.level)?
             .set_default("logging.format", defaults.logging.format)?
             .set_default(
                 "logging.include_location",
                 defaults.logging.include_location,
             )?
+            .set_default("logging.thread_ids", defaults.logging.thread_ids)?
+            .set_default("logging.thread_names", defaults.logging.thread_names)?
             // Connection configuration
             .set_default(
                 "connection.max_connections",
@@ -213,7 +211,7 @@ impl Config {
         }
 
         // Validate log level
-        match config.logging.log_level.to_lowercase().as_str() {
+        match config.logging.level.to_lowercase().as_str() {
             "error" | "warn" | "info" | "debug" | "trace" => {}
             _ => return Err(validation_error("Invalid log level")),
         }

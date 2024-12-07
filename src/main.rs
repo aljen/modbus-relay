@@ -60,11 +60,23 @@ pub fn setup_logging(config: Option<&RelayConfig>) -> Result<(), RelayError> {
         true
     };
 
+    let thread_ids = if let Some(cfg) = config {
+        cfg.logging.thread_ids
+    } else {
+        false
+    };
+
+    let thread_names = if let Some(cfg) = config {
+        cfg.logging.thread_names
+    } else {
+        false
+    };
+
     // Build subscriber with all configuration
     let layer = tracing_subscriber::fmt::layer()
         .with_target(false)
-        .with_thread_ids(true)
-        .with_thread_names(true)
+        .with_thread_ids(thread_ids)
+        .with_thread_names(thread_names)
         .with_timer(timer)
         .with_file(include_location)
         .with_line_number(include_location)
@@ -121,8 +133,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize logging
     let config = if let Some(config_path) = &cli.common.config {
+        info!("Loading configuration from file: {:?}", config_path);
         RelayConfig::from_file(config_path.clone())?
     } else {
+        info!("Using default configuration");
         RelayConfig::new()?
     };
 

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use super::{DataBits, Parity, RtsType, StopBits};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     pub device: String,
     pub baud_rate: u32,

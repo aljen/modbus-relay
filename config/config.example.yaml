@@ -53,6 +53,10 @@ logging:
   format: "pretty"
   # Use file:line
   include_location: true
+  # Log thread ids
+  thread_ids: false
+  # Log thread names
+  thread_names: false
 
 connection:
   # Maximum number of concurrent connections
