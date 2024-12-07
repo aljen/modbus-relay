@@ -4,6 +4,9 @@ use tracing::level_filters::LevelFilter;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    /// Directory to store log files
+    pub log_dir: String,
+
     /// Enable trace-level logging for frame contents
     pub trace_frames: bool,
 
@@ -26,6 +29,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            log_dir: "logs".to_string(),
             trace_frames: false,
             level: "info".to_string(),
             format: "pretty".to_string(),

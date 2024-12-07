@@ -76,6 +76,7 @@ impl Config {
             .set_default("http.bind_port", defaults.http.bind_port)?
             .set_default("http.metrics_enabled", defaults.http.metrics_enabled)?
             // Logging configuration
+            .set_default("logging.log_dir", defaults.logging.log_dir)?
             .set_default("logging.trace_frames", defaults.logging.trace_frames)?
             .set_default("logging.level", defaults.logging.level)?
             .set_default("logging.format", defaults.logging.format)?

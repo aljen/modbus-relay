@@ -3,9 +3,17 @@ use std::process;
 use std::sync::Arc;
 
 use clap::Parser;
+use time::UtcOffset;
 use tracing::{error, info};
+use tracing_appender::{non_blocking, rolling};
+use tracing_subscriber::{
+    fmt::time::OffsetTime, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer,
+    Registry,
+};
 
-use modbus_relay::{ModbusRelay, RelayConfig, RelayError, TransportError};
+use modbus_relay::{
+    errors::InitializationError, ModbusRelay, RelayConfig, RelayError, TransportError,
+};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -26,88 +34,118 @@ struct CommonArgs {
     debug: bool,
 }
 
-pub fn setup_logging(config: Option<&RelayConfig>) -> Result<(), RelayError> {
-    use modbus_relay::errors::InitializationError;
-    use modbus_relay::RelayError;
-    use time::UtcOffset;
-    use tracing_subscriber::fmt::time::OffsetTime;
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::{filter::LevelFilter, EnvFilter, Layer, Registry};
-
+pub fn setup_logging(config: &RelayConfig) -> Result<(impl Drop, impl Drop), RelayError> {
     let timer = OffsetTime::new(
         UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC),
         time::format_description::well_known::Rfc3339,
     );
 
-    // Configure log level filter
-    let mut env_filter = EnvFilter::default();
+    let log_dir = PathBuf::from(&config.logging.log_dir);
+    let include_location = config.logging.include_location;
+    let thread_ids = config.logging.thread_ids;
+    let thread_names = config.logging.thread_names;
 
-    // Configure based on config
-    let include_location = if let Some(cfg) = config {
-        // Use configured log level
-        env_filter = env_filter.add_directive(cfg.logging.get_level_filter().into());
+    std::fs::create_dir_all(&log_dir).unwrap_or_else(|_| {
+        eprintln!("Failed to create log directory {}", log_dir.display());
+        process::exit(1);
+    });
 
-        if cfg.logging.trace_frames {
-            env_filter = env_filter
-                .add_directive("modbus_relay::protocol=trace".parse().unwrap())
-                .add_directive("modbus_relay::transport=trace".parse().unwrap());
-        }
+    // Non-blocking stdout
+    let (stdout_writer, stdout_guard) = non_blocking(std::io::stdout());
 
-        cfg.logging.include_location
-    } else {
-        // Use INFO level for startup
-        env_filter = env_filter.add_directive(LevelFilter::INFO.into());
-        true
-    };
+    // Rotating log writer
+    let file_appender = rolling::daily(log_dir, "modbus-relay.log");
+    let (file_writer, file_guard) = non_blocking(file_appender);
 
-    let thread_ids = if let Some(cfg) = config {
-        cfg.logging.thread_ids
-    } else {
-        false
-    };
+    // Environment-based filter
+    let mut stdout_env_filter = EnvFilter::builder()
+        .with_default_directive(config.logging.get_level_filter().into())
+        .from_env_lossy();
 
-    let thread_names = if let Some(cfg) = config {
-        cfg.logging.thread_names
-    } else {
-        false
-    };
+    let mut file_env_filter = EnvFilter::builder()
+        .with_default_directive(config.logging.get_level_filter().into())
+        .from_env_lossy();
 
-    // Build subscriber with all configuration
-    let layer = tracing_subscriber::fmt::layer()
+    if config.logging.trace_frames {
+        stdout_env_filter = stdout_env_filter
+            .add_directive("modbus_relay::protocol=trace".parse().unwrap())
+            .add_directive("modbus_relay::transport=trace".parse().unwrap());
+
+        file_env_filter = file_env_filter
+            .add_directive("modbus_relay::protocol=trace".parse().unwrap())
+            .add_directive("modbus_relay::transport=trace".parse().unwrap());
+    }
+
+    // Log layer for stdout
+    let stdout_layer = tracing_subscriber::fmt::layer()
+        .with_writer(stdout_writer)
         .with_target(false)
         .with_thread_ids(thread_ids)
         .with_thread_names(thread_names)
-        .with_timer(timer)
         .with_file(include_location)
         .with_line_number(include_location)
         .with_level(true)
-        .with_filter(env_filter);
+        .with_timer(timer.clone())
+        .with_filter(stdout_env_filter);
 
-    let subscriber = Registry::default().with(layer);
+    // Log layer for file
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(file_writer)
+        .with_target(false)
+        .with_thread_ids(thread_ids)
+        .with_thread_names(thread_names)
+        .with_file(include_location)
+        .with_line_number(include_location)
+        .with_level(true)
+        .with_timer(timer)
+        .with_filter(file_env_filter);
 
-    // Set up global subscriber only once
-    static LOGGER_INITIALIZED: std::sync::Once = std::sync::Once::new();
-    let mut error = None;
-
-    LOGGER_INITIALIZED.call_once(|| {
-        if let Err(e) = tracing::subscriber::set_global_default(subscriber) {
-            error = Some(RelayError::Init(InitializationError::logging(format!(
+    // Combine all layers
+    Registry::default()
+        .with(stdout_layer)
+        .with(file_layer)
+        .try_init()
+        .map_err(|e| {
+            RelayError::Init(InitializationError::logging(format!(
                 "Failed to initialize logging: {}",
                 e
-            ))));
-        }
-    });
+            )))
+        })?;
 
-    if let Some(e) = error {
-        return Err(e);
-    }
-
-    Ok(())
+    Ok((stdout_guard, file_guard))
 }
 
 #[tokio::main]
 async fn main() {
-    if let Err(e) = run().await {
+    let cli = Cli::parse();
+
+    // Load configuration
+    let config = if let Some(config_path) = &cli.common.config {
+        RelayConfig::from_file(config_path.clone())
+    } else {
+        RelayConfig::new()
+    };
+
+    let config = match config {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("Failed to load configuration: {:#}", e);
+            process::exit(1);
+        }
+    };
+
+    // Setup logging based on configuration
+    let (_stdout_guard, _file_guard) = match setup_logging(&config) {
+        Ok(guards) => guards,
+        Err(e) => {
+            eprintln!("Failed to setup logging: {:#}", e);
+            process::exit(1);
+        }
+    };
+
+    info!("Starting Modbus Relay...");
+
+    if let Err(e) = run(config).await {
         error!("Fatal error: {:#}", e);
         if let Some(RelayError::Transport(TransportError::Io { details, .. })) =
             e.downcast_ref::<RelayError>()
@@ -124,25 +162,7 @@ async fn main() {
     }
 }
 
-async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    setup_logging(None)?;
-
-    info!("Starting Modbus Relay...");
-
-    let cli = Cli::parse();
-
-    // Initialize logging
-    let config = if let Some(config_path) = &cli.common.config {
-        info!("Loading configuration from file: {:?}", config_path);
-        RelayConfig::from_file(config_path.clone())?
-    } else {
-        info!("Using default configuration");
-        RelayConfig::new()?
-    };
-
-    // Setup logging based on configuration
-    setup_logging(Some(&config))?;
-
+async fn run(config: RelayConfig) -> Result<(), Box<dyn std::error::Error>> {
     let relay = Arc::new(ModbusRelay::new(config)?);
     relay.run().await?;
 

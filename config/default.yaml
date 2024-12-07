@@ -45,18 +45,20 @@ http:
   metrics_enabled: true
 
 logging:
+  # Directory to store log files
+  log_dir: "logs"
   # Trace modbus frames
   trace_frames: false
   # Log level (trace, debug, info, warn, error)
-  level: "info"
+  level: "trace"
   # Log format (pretty, json)
   format: "pretty"
   # Use file:line
-  include_location: true
+  include_location: false
   # Log thread ids
   thread_ids: false
   # Log thread names
-  thread_names: false
+  thread_names: true
 
 connection:
   # Maximum number of concurrent connections
