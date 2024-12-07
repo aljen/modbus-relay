@@ -164,7 +164,31 @@ async fn main() {
 
 async fn run(config: RelayConfig) -> Result<(), Box<dyn std::error::Error>> {
     let relay = Arc::new(ModbusRelay::new(config)?);
+
+    let relay_clone = Arc::clone(&relay);
+
+    let shutdown_task = tokio::spawn(async move {
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to create SIGTERM signal handler");
+        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+            .expect("Failed to create SIGINT signal handler");
+        tokio::select! {
+            _ = sigterm.recv() => info!("Received SIGTERM"),
+            _ = sigint.recv() => info!("Received SIGINT"),
+        }
+
+        if let Err(e) = relay_clone.shutdown().await {
+            error!("Error during shutdown: {}", e);
+        }
+    });
+
     relay.run().await?;
+
+    info!("Waiting for shutdown to complete...");
+
+    shutdown_task.await?;
+
+    info!("Modbus Relay stopped");
 
     Ok(())
 }
