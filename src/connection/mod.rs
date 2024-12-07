@@ -15,7 +15,7 @@ pub use stats::IpStats;
 #[cfg(test)]
 mod tests {
     use tokio::{
-        sync::{broadcast, mpsc, Mutex},
+        sync::{mpsc, Mutex},
         time::sleep,
     };
 

@@ -265,6 +265,8 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    use crate::{DataBits, Parity, RtsType, StopBits};
+
     use super::*;
     use std::{fs, time::Duration};
     use tempfile::tempdir;
@@ -299,6 +301,46 @@ mod tests {
               bind_port: 9000
               bind_addr: "192.168.1.100"
               keep_alive: "60s"
+            rtu:
+              device: "/dev/ttyAMA0"
+              baud_rate: 9600
+              data_bits: 8
+              parity: "none"
+              stop_bits: "one"
+              flush_after_write: true
+              rts_type: "down"
+              rts_delay_us: 3500
+              transaction_timeout: "5s"
+              serial_timeout: "1s"
+              max_frame_size: 256
+            http:
+              enabled: false
+              bind_addr: "192.168.1.100"
+              bind_port: 9080
+              metrics_enabled: false
+            logging:
+              log_dir: "logs"
+              trace_frames: false
+              level: "trace"
+              format: "pretty"
+              include_location: false
+              thread_ids: false
+              thread_names: true
+            connection:
+              max_connections: 100
+              idle_timeout: "60s"
+              error_timeout: "300s"
+              connect_timeout: "5s"
+              per_ip_limits: 10
+              backoff:
+                # Initial wait time
+                initial_interval: "100ms"
+                # Maximum wait time
+                max_interval: "30s"
+                # Multiplier for each subsequent attempt
+                multiplier: 2.0
+                # Maximum number of attempts
+                max_retries: 5
             "#,
         )
         .unwrap();
@@ -307,6 +349,43 @@ mod tests {
         assert_eq!(config.tcp.bind_port, 9000);
         assert_eq!(config.tcp.bind_addr, "192.168.1.100");
         assert_eq!(config.tcp.keep_alive, Duration::from_secs(60));
+        assert_eq!(config.rtu.device, "/dev/ttyAMA0");
+        assert_eq!(config.rtu.baud_rate, 9600);
+        assert_eq!(config.rtu.data_bits, DataBits::new(8).unwrap());
+        assert_eq!(config.rtu.parity, Parity::None);
+        assert_eq!(config.rtu.stop_bits, StopBits::One);
+        assert!(config.rtu.flush_after_write);
+        assert_eq!(config.rtu.rts_type, RtsType::Down);
+        assert_eq!(config.rtu.rts_delay_us, 3500);
+        assert_eq!(config.rtu.transaction_timeout, Duration::from_secs(5));
+        assert_eq!(config.rtu.serial_timeout, Duration::from_secs(1));
+        assert_eq!(config.rtu.max_frame_size, 256);
+        assert!(!config.http.enabled);
+        assert_eq!(config.http.bind_addr, "192.168.1.100");
+        assert_eq!(config.http.bind_port, 9080);
+        assert!(!config.http.metrics_enabled);
+        assert_eq!(config.logging.log_dir, "logs");
+        assert!(!config.logging.trace_frames);
+        assert_eq!(config.logging.level, "trace");
+        assert_eq!(config.logging.format, "pretty");
+        assert!(!config.logging.include_location);
+        assert!(!config.logging.thread_ids);
+        assert!(config.logging.thread_names);
+        assert_eq!(config.connection.max_connections, 100);
+        assert_eq!(config.connection.idle_timeout, Duration::from_secs(60));
+        assert_eq!(config.connection.error_timeout, Duration::from_secs(300));
+        assert_eq!(config.connection.connect_timeout, Duration::from_secs(5));
+        assert_eq!(config.connection.per_ip_limits, Some(10));
+        assert_eq!(
+            config.connection.backoff.initial_interval,
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            config.connection.backoff.max_interval,
+            Duration::from_secs(30)
+        );
+        assert_eq!(config.connection.backoff.multiplier, 2.0);
+        assert_eq!(config.connection.backoff.max_retries, 5);
     }
 
     #[test]
