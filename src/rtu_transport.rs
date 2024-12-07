@@ -30,7 +30,7 @@ impl RtuTransport {
     pub fn new(config: &RtuConfig, trace_frames: bool) -> Result<Self, TransportError> {
         info!("Opening serial port {}", config.serial_port_info());
 
-        // Explicite otwieramy jako TTYPort na Unixie
+        // Explicitly open as TTYPort on Unix
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         let tty_port: TTYPort = serialport::new(&config.device, config.baud_rate)
             .data_bits(config.data_bits.into())

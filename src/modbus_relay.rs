@@ -4,10 +4,10 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::{broadcast, mpsc, Mutex},
-    task::JoinHandle,
+    task::{JoinError, JoinHandle},
     time::{sleep, timeout},
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     connection::StatEvent,
@@ -27,11 +27,12 @@ pub struct ModbusRelay {
     config: RelayConfig,
     transport: Arc<RtuTransport>,
     connection_manager: Arc<ConnectionManager>,
-    stats_manager: Arc<Mutex<StatsManager>>,
     stats_tx: mpsc::Sender<StatEvent>,
     shutdown: broadcast::Sender<()>,
     main_shutdown: tokio::sync::watch::Sender<bool>,
+    stats_manager_shutdown: tokio::sync::watch::Sender<bool>,
     tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    stats_manager_handle: Mutex<Option<JoinHandle<Result<(), JoinError>>>>,
 }
 
 impl ModbusRelay {
@@ -59,16 +60,30 @@ impl ModbusRelay {
 
         let (shutdown_tx, _) = broadcast::channel(1);
         let (main_shutdown_tx, _) = tokio::sync::watch::channel(false);
+        let (stats_manager_shutdown_tx, _) = tokio::sync::watch::channel(false);
+
+        // Start stats manager but keep its handle separate from tasks vector
+        let stats_manager_handle = tokio::spawn({
+            let stats_manager = Arc::clone(&stats_manager);
+            let stats_manager_shutdown_tx = stats_manager_shutdown_tx.subscribe();
+
+            tokio::spawn(async move {
+                let mut stats_manager = stats_manager.lock().await;
+
+                stats_manager.run(stats_manager_shutdown_tx).await;
+            })
+        });
 
         Ok(Self {
             config,
             transport: Arc::new(transport),
             connection_manager,
-            stats_manager,
             stats_tx,
             shutdown: shutdown_tx,
             main_shutdown: main_shutdown_tx,
+            stats_manager_shutdown: stats_manager_shutdown_tx,
             tasks: Arc::new(Mutex::new(Vec::new())),
+            stats_manager_handle: Mutex::new(Some(stats_manager_handle)),
         })
     }
 
@@ -126,18 +141,6 @@ impl ModbusRelay {
     }
 
     pub async fn run(self: Arc<Self>) -> Result<(), RelayError> {
-        // Start stats manager
-        let shutdown_rx = self.shutdown.subscribe();
-
-        self.spawn_task("stats_manager", {
-            let stats_manager = Arc::clone(&self.stats_manager);
-
-            async move {
-                let mut stats_manager = stats_manager.lock().await;
-                stats_manager.run(shutdown_rx).await;
-            }
-        });
-
         // Start TCP server
         let tcp_server = {
             let transport = Arc::clone(&self.transport);
@@ -146,6 +149,9 @@ impl ModbusRelay {
             let mut rx = self.shutdown.subscribe();
             let config = self.config.clone();
             let keep_alive_duration = self.config.tcp.keep_alive;
+            let trace_frames = self.config.logging.trace_frames;
+
+            let shutdown_rx = self.shutdown.subscribe();
 
             tokio::spawn(async move {
                 let addr = format!("{}:{}", config.tcp.bind_addr, config.tcp.bind_port);
@@ -167,6 +173,7 @@ impl ModbusRelay {
                                     let transport = Arc::clone(&transport);
                                     let manager = Arc::clone(&manager);
                                     let stats_tx = stats_tx.clone();
+                                    let shutdown_rx = shutdown_rx.resubscribe();
 
                                     Self::configure_tcp_stream(&socket, keep_alive_duration)
                                         .await
@@ -182,7 +189,17 @@ impl ModbusRelay {
                                         .ok();
 
                                     tokio::spawn(async move {
-                                        if let Err(e) = handle_client(socket, peer, transport, manager, stats_tx).await {
+                                        if let Err(e) = handle_client(
+                                            socket,
+                                            peer,
+                                            transport,
+                                            manager,
+                                            stats_tx,
+                                            shutdown_rx,
+                                            trace_frames,
+                                        )
+                                        .await
+                                        {
                                             error!("Client error: {}", e);
                                         }
                                     });
@@ -198,6 +215,8 @@ impl ModbusRelay {
                         }
                     }
                 }
+
+                info!("MODBUS TCP server shutdown complete");
 
                 Ok::<_, RelayError>(())
             })
@@ -240,11 +259,13 @@ impl ModbusRelay {
                         }
                     }
                     _ = shutdown_rx.recv() => {
-                        debug!("Cleanup task received shutdown signal");
+                        trace!("Cleanup task received shutdown signal");
                         break;
                     }
                 }
             }
+
+            trace!("Cleanup task exited");
         });
 
         // Wait for shutdown signal
@@ -252,11 +273,12 @@ impl ModbusRelay {
 
         tokio::select! {
             _ = shutdown_rx.changed() => {
-                info!("Main loop received shutdown signal");
+                trace!("Main loop received shutdown signal");
             }
         }
 
-        info!("Main loop exited");
+        trace!("Main loop exited");
+
         Ok(())
     }
 
@@ -270,13 +292,14 @@ impl ModbusRelay {
 
         // 1. Log initial state
         let stats = self.connection_manager.get_stats().await?;
-        info!(
+        trace!(
             "Current state: {} active connections, {} total requests",
-            stats.active_connections, stats.total_requests
+            stats.active_connections,
+            stats.total_requests
         );
 
         // 2. Send shutdown signal to all tasks
-        info!("Sending shutdown signal to tasks");
+        trace!("Sending shutdown signal to tasks");
         self.shutdown.send(()).map_err(|e| {
             RelayError::Connection(ConnectionError::invalid_state(format!(
                 "Failed to send shutdown signal: {}",
@@ -284,13 +307,11 @@ impl ModbusRelay {
             )))
         })?;
 
-        // 3. Initiate connection shutdown
-        info!("Initiating connection shutdown");
-        if let Err(e) = self.connection_manager.close_all_connections().await {
-            error!("Error during connection shutdown: {}", e);
-        }
-
-        // 4. Wait for connections to close with timeout
+        // 3. Wait for connections to close with timeout
+        info!(
+            "Waiting {}s for connections to close",
+            timeout_duration.as_secs()
+        );
         let start = Instant::now();
         while start.elapsed() < timeout_duration {
             if let Ok(stats) = self.connection_manager.get_stats().await {
@@ -303,17 +324,24 @@ impl ModbusRelay {
                     stats.active_connections
                 );
             }
-            sleep(Duration::from_secs(1)).await;
+
+            trace!("Sleeping for 100ms");
+            sleep(Duration::from_millis(100)).await;
         }
 
-        // 5. Now we can safely close the serial port
+        // Check if we timed out
+        if start.elapsed() >= timeout_duration {
+            warn!("Timeout waiting for connections to close, forcing shutdown");
+        }
+
+        // 4. Now we can safely close the serial port
         info!("Closing serial port");
         if let Err(e) = self.transport.close().await {
             error!("Error closing serial port: {}", e);
         }
 
-        // 6. Waiting for all tasks to complete
-        info!("Waiting for tasks to complete");
+        // 5. Waiting for all tasks to complete
+        trace!("Waiting for tasks to complete");
         let tasks = {
             let mut tasks_guard = self.tasks.lock().await;
             tasks_guard.drain(..).collect::<Vec<_>>()
@@ -342,6 +370,32 @@ impl ModbusRelay {
             }
         }
 
+        let handle = {
+            let mut guard = self.stats_manager_handle.lock().await;
+            guard.take()
+        };
+
+        // 6. Wait for stats manager to complete
+        let _ = self.stats_manager_shutdown.send(true);
+
+        if let Some(handle) = handle {
+            match handle.await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    error!(
+                        "Stats manager failed to shutdown cleanly: inner error = {}",
+                        e
+                    );
+                }
+                Err(e) => {
+                    error!(
+                        "Stats manager failed to shutdown cleanly: join error = {}",
+                        e
+                    );
+                }
+            }
+        }
+
         info!("Shutdown complete");
         Ok(())
     }
@@ -349,7 +403,8 @@ impl ModbusRelay {
 
 async fn read_frame(
     reader: &mut tokio::net::tcp::ReadHalf<'_>,
-    peer_addr: SocketAddr,
+    peer_addr: &SocketAddr,
+    trace_frames: bool,
 ) -> Result<(Vec<u8>, [u8; 2]), RelayError> {
     let mut tcp_buf = vec![0u8; 256];
 
@@ -380,11 +435,13 @@ async fn read_frame(
         }
     };
 
-    debug!(
-        "Received TCP frame from {}: {:02X?}",
-        peer_addr,
-        &tcp_buf[..n]
-    );
+    if trace_frames {
+        trace!(
+            "Received TCP frame from {}: {:02X?}",
+            peer_addr,
+            &tcp_buf[..n]
+        );
+    }
 
     // Validate MBAP header
     let transaction_id = [tcp_buf[0], tcp_buf[1]];
@@ -420,12 +477,14 @@ async fn process_frame(
     modbus: &ModbusProcessor,
     frame: &[u8],
     transaction_id: [u8; 2],
+    trace_frames: bool,
 ) -> Result<Vec<u8>, RelayError> {
     modbus
         .process_request(
             transaction_id,
             frame[6],    // Unit ID
             &frame[7..], // PDU
+            trace_frames,
         )
         .await
 }
@@ -433,24 +492,117 @@ async fn process_frame(
 async fn send_response(
     writer: &mut tokio::net::tcp::WriteHalf<'_>,
     response: &[u8],
-    peer_addr: SocketAddr,
+    peer_addr: &SocketAddr,
+    trace_frames: bool,
 ) -> Result<(), RelayError> {
-    debug!("Sending TCP response to {}: {:02X?}", peer_addr, response);
+    if trace_frames {
+        trace!("Sending TCP response to {}: {:02X?}", peer_addr, response);
+    }
 
     // Send TCP response with timeout
     match timeout(Duration::from_secs(5), writer.write_all(response)).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(e)) => Err(RelayError::client(
             ClientErrorKind::WriteError,
-            peer_addr,
+            *peer_addr,
             format!("Write error: {}", e),
         )),
         Err(_) => Err(RelayError::client(
             ClientErrorKind::Timeout,
-            peer_addr,
+            *peer_addr,
             "Write timeout".to_string(),
         )),
     }
+}
+
+async fn handle_frame(
+    reader: &mut tokio::net::tcp::ReadHalf<'_>,
+    writer: &mut tokio::net::tcp::WriteHalf<'_>,
+    peer_addr: &SocketAddr,
+    modbus: &ModbusProcessor,
+    stats_tx: &mpsc::Sender<StatEvent>,
+    trace_frames: bool,
+) -> Result<bool, RelayError> {
+    let frame_start = Instant::now();
+
+    // 1. Read frame
+    let (frame, transaction_id) = match read_frame(reader, peer_addr, trace_frames).await {
+        Ok((frame, id)) => (frame, id),
+        Err(RelayError::Connection(ConnectionError::Disconnected)) => {
+            info!("Client {} disconnected", peer_addr);
+            return Ok(false); // Signal to break the loop
+        }
+        Err(e) => {
+            stats_tx
+                .send(StatEvent::RequestProcessed {
+                    addr: *peer_addr,
+                    success: false,
+                    duration_ms: frame_start.elapsed().as_millis() as u64,
+                })
+                .await
+                .map_err(|e| {
+                    warn!("Failed to send stats event: {}", e);
+                })
+                .ok();
+
+            return Err(e);
+        }
+    };
+
+    // 2. Process frame
+    let response = match process_frame(modbus, &frame, transaction_id, trace_frames).await {
+        Ok(response) => {
+            // Record successful Modbus request
+            stats_tx
+                .send(StatEvent::RequestProcessed {
+                    addr: *peer_addr,
+                    success: true,
+                    duration_ms: frame_start.elapsed().as_millis() as u64,
+                })
+                .await
+                .map_err(|e| {
+                    warn!("Failed to send stats event: {}", e);
+                })
+                .ok();
+
+            response
+        }
+        Err(e) => {
+            // Record failed Modbus request
+            stats_tx
+                .send(StatEvent::RequestProcessed {
+                    addr: *peer_addr,
+                    success: false,
+                    duration_ms: frame_start.elapsed().as_millis() as u64,
+                })
+                .await
+                .map_err(|e| {
+                    warn!("Failed to send stats event: {}", e);
+                })
+                .ok();
+
+            return Err(e);
+        }
+    };
+
+    // 3. Send response
+    if let Err(e) = send_response(writer, &response, peer_addr, trace_frames).await {
+        stats_tx
+            .send(StatEvent::RequestProcessed {
+                addr: *peer_addr,
+                success: false,
+                duration_ms: frame_start.elapsed().as_millis() as u64,
+            })
+            .await
+            .map_err(|e| {
+                warn!("Failed to send stats event: {}", e);
+            })
+            .ok();
+
+        return Err(e);
+    }
+
+    Ok(true) // Continue the loop
 }
 
 async fn handle_client(
@@ -459,6 +611,8 @@ async fn handle_client(
     transport: Arc<RtuTransport>,
     manager: Arc<ConnectionManager>,
     stats_tx: mpsc::Sender<StatEvent>,
+    mut shutdown_rx: broadcast::Receiver<()>,
+    trace_frames: bool,
 ) -> Result<(), RelayError> {
     // Create connection guard to track this connection
     let _guard = manager.accept_connection(peer_addr).await?;
@@ -481,91 +635,28 @@ async fn handle_client(
         })
     })?;
 
-    info!("New client connected from {}", addr);
+    debug!("New client connected from {}", addr);
 
     let (mut reader, mut writer) = stream.split();
     let modbus = ModbusProcessor::new(transport);
 
     loop {
-        let frame_start = Instant::now();
-
-        // 1. Read frame
-        let (frame, transaction_id) = match read_frame(&mut reader, peer_addr).await {
-            Ok((frame, id)) => (frame, id),
-            Err(RelayError::Connection(ConnectionError::Disconnected)) => {
-                info!("Client {} disconnected", peer_addr);
+        tokio::select! {
+            result = handle_frame(&mut reader, &mut writer, &peer_addr, &modbus, &stats_tx, trace_frames) => {
+                match result {
+                    Ok(true) => continue,
+                    Ok(false) => break, // Client disconnected
+                    Err(e) => return Err(e),
+                }
+            }
+            _ = shutdown_rx.recv() => {
+                info!("Client {} received shutdown signal", peer_addr);
                 break;
             }
-            Err(e) => {
-                stats_tx
-                    .send(StatEvent::RequestProcessed {
-                        addr: peer_addr,
-                        success: false,
-                        duration_ms: frame_start.elapsed().as_millis() as u64,
-                    })
-                    .await
-                    .map_err(|e| {
-                        warn!("Failed to send stats event: {}", e);
-                    })
-                    .ok();
-
-                return Err(e);
-            }
-        };
-
-        // 2. Process frame
-        let response = match process_frame(&modbus, &frame, transaction_id).await {
-            Ok(response) => {
-                // Record successful Modbus request
-                stats_tx
-                    .send(StatEvent::RequestProcessed {
-                        addr: peer_addr,
-                        success: true,
-                        duration_ms: frame_start.elapsed().as_millis() as u64,
-                    })
-                    .await
-                    .map_err(|e| {
-                        warn!("Failed to send stats event: {}", e);
-                    })
-                    .ok();
-
-                response
-            }
-            Err(e) => {
-                // Record failed Modbus request
-                stats_tx
-                    .send(StatEvent::RequestProcessed {
-                        addr: peer_addr,
-                        success: false,
-                        duration_ms: frame_start.elapsed().as_millis() as u64,
-                    })
-                    .await
-                    .map_err(|e| {
-                        warn!("Failed to send stats event: {}", e);
-                    })
-                    .ok();
-
-                return Err(e);
-            }
-        };
-
-        // 3. Send response
-        if let Err(e) = send_response(&mut writer, &response, peer_addr).await {
-            stats_tx
-                .send(StatEvent::RequestProcessed {
-                    addr: peer_addr,
-                    success: false,
-                    duration_ms: frame_start.elapsed().as_millis() as u64,
-                })
-                .await
-                .map_err(|e| {
-                    warn!("Failed to send stats event: {}", e);
-                })
-                .ok();
-
-            return Err(e);
         }
     }
+
+    debug!("Client {} disconnected", peer_addr);
 
     Ok(())
 }

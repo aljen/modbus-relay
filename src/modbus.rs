@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tracing::debug;
+use tracing::{debug, trace};
 
 use crate::{errors::FrameError, FrameErrorKind, RelayError, RtuTransport};
 
@@ -197,6 +197,7 @@ impl ModbusProcessor {
         transaction_id: [u8; 2],
         unit_id: u8,
         pdu: &[u8],
+        trace_frames: bool,
     ) -> Result<Vec<u8>, RelayError> {
         // Build RTU request frame: [Unit ID][PDU][CRC16]
         let mut rtu_request = Vec::with_capacity(1 + pdu.len() + 2); // Unit ID + PDU + CRC16
@@ -207,13 +208,15 @@ impl ModbusProcessor {
         let crc = calc_crc16(&rtu_request);
         rtu_request.extend_from_slice(&crc.to_le_bytes()); // Append CRC16 in little-endian
 
-        debug!(
-            "Sending RTU request: unit_id=0x{:02X}, function=0x{:02X}, data={:02X?}, crc=0x{:04X}",
-            unit_id,
-            pdu.first().copied().unwrap_or(0),
-            &pdu[1..],
-            crc
-        );
+        if trace_frames {
+            trace!(
+                "Sending RTU request: unit_id=0x{:02X}, function=0x{:02X}, data={:02X?}, crc=0x{:04X}",
+                unit_id,
+                pdu.first().copied().unwrap_or(0),
+                &pdu[1..],
+                crc
+            );
+        }
 
         // Estimate the expected RTU response size
         let function_code = pdu.first().copied().unwrap_or(0);

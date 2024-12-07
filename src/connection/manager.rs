@@ -1,7 +1,7 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use tokio::sync::{mpsc, oneshot, Mutex, Semaphore};
-use tracing::{error, info};
+use tracing::error;
 
 use crate::{config::ConnectionConfig, ConnectionError, RelayError};
 
@@ -87,18 +87,6 @@ impl Manager {
         })
     }
 
-    pub async fn close_all_connections(&self) -> Result<(), RelayError> {
-        let active_conns = self.active_connections.lock().await;
-        let total_active: usize = active_conns.values().sum();
-
-        if total_active > 0 {
-            info!("Closing {} active connections", total_active);
-            // TODO(aljen): Logic for force-closing connections should be added here
-        }
-
-        Ok(())
-    }
-
     pub async fn get_connection_count(&self, addr: &SocketAddr) -> usize {
         self.active_connections
             .lock()
@@ -180,22 +168,17 @@ impl Manager {
         Ok(())
     }
 
-    pub(crate) async fn decrease_connection_count(&self, addr: SocketAddr) {
-        let mut active_conns = self.active_connections.lock().await;
+    pub(crate) fn decrease_connection_count(&self, addr: SocketAddr) {
+        let mut active_conns = self
+            .active_connections
+            .try_lock()
+            .expect("Failed to lock active_connections in guard drop");
+
         if let Some(count) = active_conns.get_mut(&addr) {
             *count = count.saturating_sub(1);
             if *count == 0 {
                 active_conns.remove(&addr);
             }
-        }
-
-        // Notify stats manager about disconnection
-        if let Err(e) = self
-            .stats_tx
-            .send(StatEvent::ClientDisconnected(addr))
-            .await
-        {
-            error!("Failed to send disconnection event to stats manager: {}", e);
         }
     }
 

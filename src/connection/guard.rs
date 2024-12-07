@@ -1,6 +1,8 @@
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::OwnedSemaphorePermit;
-use tracing::debug;
+use tracing::{trace, warn};
+
+use crate::connection::StatEvent;
 
 use super::ConnectionManager;
 
@@ -15,13 +17,18 @@ pub struct ConnectionGuard {
 
 impl Drop for ConnectionGuard {
     fn drop(&mut self) {
-        let manager = self.manager.clone();
-        let addr = self.addr;
+        trace!("Dropping connection guard for {}", self.addr);
 
-        debug!("Closing connection from {}", addr);
+        if let Err(e) = self
+            .manager
+            .stats_tx()
+            .try_send(StatEvent::ClientDisconnected(self.addr))
+        {
+            warn!("Failed to send disconnect event: {}", e);
+        }
 
-        tokio::spawn(async move {
-            manager.decrease_connection_count(addr).await;
-        });
+        self.manager.decrease_connection_count(self.addr);
+
+        trace!("Connection guard dropped for {}", self.addr);
     }
 }

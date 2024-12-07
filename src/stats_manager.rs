@@ -1,6 +1,6 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::SystemTime};
 
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, info, warn};
 
 use crate::{config::StatsConfig, connection::StatEvent, ClientStats, ConnectionStats};
@@ -26,11 +26,28 @@ impl StatsManager {
         (manager, tx)
     }
 
-    pub async fn run(&mut self, mut shutdown_rx: broadcast::Receiver<()>) {
+    pub async fn run(&mut self, mut shutdown_rx: tokio::sync::watch::Receiver<bool>) {
         let mut cleanup_interval = tokio::time::interval(self.config.cleanup_interval);
 
         loop {
             tokio::select! {
+                shutdown = shutdown_rx.changed() => {
+                    match shutdown {
+                        Ok(_) => {
+                            info!("Stats manager shutting down");
+                            // Ensure all events are processed before shutting down
+                            while let Ok(event) = self.event_rx.try_recv() {
+                                self.handle_event(event).await;
+                            }
+                            break;
+                        }
+                        Err(e) => {
+                            warn!("Shutdown channel closed: {}", e);
+                            break;
+                        }
+                    }
+                }
+
                 Some(event) = self.event_rx.recv() => {
                     self.handle_event(event).await;
                 }
@@ -38,13 +55,10 @@ impl StatsManager {
                 _ = cleanup_interval.tick() => {
                     self.cleanup_idle_stats().await;
                 }
-
-                _ = shutdown_rx.recv() => {
-                    info!("Stats manager shutting down");
-                    break;
-                }
             }
         }
+
+        info!("Stats manager shutdown complete");
     }
 
     async fn handle_event(&mut self, event: StatEvent) {
@@ -160,7 +174,7 @@ mod tests {
         let (mut manager, tx) = StatsManager::new(config);
         let addr = "127.0.0.1:8080".parse().unwrap();
 
-        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let manager_handle = tokio::spawn(async move {
             manager.run(shutdown_rx).await;
         });
@@ -210,7 +224,7 @@ mod tests {
         assert_eq!(conn_stats.total_errors, 1);
 
         // Cleanup
-        shutdown_tx.send(()).unwrap();
+        shutdown_tx.send(true).unwrap();
         manager_handle.await.unwrap();
     }
 
@@ -221,7 +235,7 @@ mod tests {
         let (mut manager, tx) = StatsManager::new(config);
         let addr = "127.0.0.1:8080".parse().unwrap();
 
-        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let manager_handle = tokio::spawn(async move {
             manager.run(shutdown_rx).await;
         });
@@ -242,7 +256,7 @@ mod tests {
         let conn_stats = response_rx.await.unwrap();
         assert_eq!(conn_stats.active_connections, 0);
 
-        shutdown_tx.send(()).unwrap();
+        shutdown_tx.send(true).unwrap();
         manager_handle.await.unwrap();
     }
 }

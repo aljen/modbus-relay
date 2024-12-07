@@ -175,6 +175,8 @@ pub async fn start_http_server(
         })
         .await?;
 
+    info!("HTTP server shutdown complete");
+
     Ok(())
 }
 
@@ -196,7 +198,7 @@ mod tests {
         let (stats_manager, stats_tx) = StatsManager::new(stats_config);
         let stats_manager = Arc::new(Mutex::new(stats_manager));
 
-        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
         let stats_handle = tokio::spawn({
             async move {
@@ -223,7 +225,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        shutdown_tx.send(()).unwrap();
+        shutdown_tx.send(true).unwrap();
         stats_handle.await.unwrap();
     }
 
@@ -234,7 +236,7 @@ mod tests {
         let (stats_manager, stats_tx) = StatsManager::new(stats_config);
         let stats_manager = Arc::new(Mutex::new(stats_manager));
 
-        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
         let stats_handle = tokio::spawn({
             async move {
@@ -258,7 +260,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        shutdown_tx.send(()).unwrap();
+        shutdown_tx.send(true).unwrap();
         stats_handle.await.unwrap();
     }
 }
