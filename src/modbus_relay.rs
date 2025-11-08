@@ -114,7 +114,7 @@ impl ModbusRelay {
         })?;
 
         // Set TCP_NODELAY
-        sock_ref.set_nodelay(true).map_err(|e| {
+        sock_ref.set_tcp_nodelay(true).map_err(|e| {
             RelayError::Transport(TransportError::Io {
                 operation: IoOperation::Configure,
                 details: "Failed to set TCP_NODELAY".to_string(),
