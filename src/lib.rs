@@ -20,7 +20,7 @@ pub use errors::{
     IoOperation, ProtocolErrorKind, RelayError, RtsError, SerialErrorKind, TransportError,
 };
 pub use http_api::start_http_server;
-pub use modbus::{guess_response_size, ModbusProcessor};
+pub use modbus::{ModbusProcessor, guess_response_size};
 pub use modbus_relay::ModbusRelay;
 pub use rtu_transport::RtuTransport;
 pub use stats_manager::StatsManager;

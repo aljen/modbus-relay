@@ -3,13 +3,14 @@ use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration, time::Inst
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::{broadcast, mpsc, Mutex},
+    sync::{Mutex, broadcast, mpsc},
     task::{JoinError, JoinHandle},
     time::{sleep, timeout},
 };
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
+    ConnectionManager, IoOperation, ModbusProcessor, RelayConfig, StatsConfig, StatsManager,
     connection::StatEvent,
     errors::{
         ClientErrorKind, ConnectionError, FrameErrorKind, ProtocolErrorKind, RelayError,
@@ -18,7 +19,6 @@ use crate::{
     http_api::start_http_server,
     rtu_transport::RtuTransport,
     utils::generate_request_id,
-    ConnectionManager, IoOperation, ModbusProcessor, RelayConfig, StatsConfig, StatsManager,
 };
 
 use socket2::{SockRef, TcpKeepalive};
@@ -294,8 +294,7 @@ impl ModbusRelay {
         let stats = self.connection_manager.get_stats().await?;
         trace!(
             "Current state: {} active connections, {} total requests",
-            stats.active_connections,
-            stats.total_requests
+            stats.active_connections, stats.total_requests
         );
 
         // 2. Send shutdown signal to all tasks

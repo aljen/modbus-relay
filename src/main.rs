@@ -7,12 +7,12 @@ use time::UtcOffset;
 use tracing::{error, info};
 use tracing_appender::{non_blocking, rolling};
 use tracing_subscriber::{
-    fmt::time::OffsetTime, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer,
-    Registry,
+    EnvFilter, Layer, Registry, fmt::time::OffsetTime, layer::SubscriberExt,
+    util::SubscriberInitExt,
 };
 
 use modbus_relay::{
-    errors::InitializationError, ModbusRelay, RelayConfig, RelayError, TransportError,
+    ModbusRelay, RelayConfig, RelayError, TransportError, errors::InitializationError,
 };
 
 #[derive(Parser)]
@@ -153,11 +153,17 @@ async fn main() {
             e.downcast_ref::<RelayError>()
         {
             if details.contains("serial port") {
-                error!("Hint: Make sure the configured serial port exists and you have permission to access it");
+                error!(
+                    "Hint: Make sure the configured serial port exists and you have permission to access it"
+                );
                 #[cfg(target_os = "macos")]
-                error!("Hint: On macOS, you might need to install the driver from https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers");
+                error!(
+                    "Hint: On macOS, you might need to install the driver from https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers"
+                );
                 #[cfg(target_os = "linux")]
-                error!("Hint: On Linux, you might need to add your user to the dialout group: sudo usermod -a -G dialout $USER");
+                error!(
+                    "Hint: On Linux, you might need to add your user to the dialout group: sudo usermod -a -G dialout $USER"
+                );
             }
         }
         process::exit(1);

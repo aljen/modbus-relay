@@ -1,11 +1,11 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::SystemTime};
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
+use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
 use serde::Serialize;
 use tokio::sync::{broadcast, oneshot};
 use tracing::info;
 
-use crate::{connection::StatEvent, ConnectionManager};
+use crate::{ConnectionManager, connection::StatEvent};
 
 #[derive(Debug, Serialize)]
 struct HealthResponse {

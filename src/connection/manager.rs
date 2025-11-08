@@ -1,9 +1,9 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
-use tokio::sync::{mpsc, oneshot, Mutex, Semaphore};
+use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 use tracing::error;
 
-use crate::{config::ConnectionConfig, ConnectionError, RelayError};
+use crate::{ConnectionError, RelayError, config::ConnectionConfig};
 
 use super::{ConnectionGuard, ConnectionStats, StatEvent};
 

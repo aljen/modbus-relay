@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use std::os::unix::io::AsRawFd;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-use libc::{TIOCMGET, TIOCMSET, TIOCM_RTS};
+use libc::{TIOCM_RTS, TIOCMGET, TIOCMSET};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use serialport::TTYPort;

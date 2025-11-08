@@ -1,4 +1,4 @@
-use super::{stats::ClientStats, ConnectionStats};
+use super::{ConnectionStats, stats::ClientStats};
 use std::net::SocketAddr;
 use tokio::sync::oneshot;
 

@@ -15,13 +15,13 @@ pub use stats::IpStats;
 #[cfg(test)]
 mod tests {
     use tokio::{
-        sync::{mpsc, Mutex},
+        sync::{Mutex, mpsc},
         time::sleep,
     };
 
     use crate::{
-        config::{BackoffConfig, ConnectionConfig},
         ConnectionError, RelayError, StatsConfig, StatsManager,
+        config::{BackoffConfig, ConnectionConfig},
     };
 
     use super::*;

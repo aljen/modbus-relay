@@ -1,9 +1,9 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::SystemTime};
 
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tracing::{debug, info, warn};
 
-use crate::{config::StatsConfig, connection::StatEvent, ClientStats, ConnectionStats};
+use crate::{ClientStats, ConnectionStats, config::StatsConfig, connection::StatEvent};
 
 pub struct StatsManager {
     stats: Arc<Mutex<HashMap<SocketAddr, ClientStats>>>,
