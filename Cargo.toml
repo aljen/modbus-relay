@@ -33,37 +33,31 @@ include = [
 maintenance = { status = "actively-developed" }
 
 [dependencies]
-axum = "0.7.9"
-clap = { version = "4.5.23", features = ["derive"] }
-config = "0.14.1"
+axum = "0.8.6"
+clap = { version = "4.5.51", features = ["derive"] }
+config = "0.15.18"
 futures = "0.3.31"
 hex = "0.4.3"
 humantime-serde = "1.1.1"
-libc = "0.2.167"
-rand = { version = "0.8.5", features = ["small_rng"] }
-rmodbus = "0.9.9"
-serde = { version = "1.0.215", features = ["derive"] }
-serde_json = "1.0.133"
+libc = "0.2.177"
+serde = { version = "1.0.228", features = ["derive"] }
 serde_yaml = "0.9.34"
-serialport = "4.6.1"
+serialport = "4.8.1"
 socket2 = "0.5.8"
-thiserror = "2.0.4"
-time = { version = "0.3.37", features = ["local-offset"] }
-tokio = { version = "1.42.0", features = ["full"] }
-tower = "0.5.1"
-tower-http = { version = "0.6.2", features = ["trace"] }
+thiserror = "2.0.17"
+time = { version = "0.3.44", features = ["local-offset"] }
+tokio = { version = "1.48.0", features = ["full"] }
 tracing = "0.1.41"
 tracing-appender = "0.2.3"
-tracing-journald = "0.3.1"
-tracing-subscriber = { version = "0.3.19", features = [
+tracing-subscriber = { version = "0.3.20", features = [
   "env-filter",
   "json",
   "time",
 ] }
 
 [dev-dependencies]
-tempdir = "0.3.7"
-tempfile = "3.14.0"
+tower = "0.5.2"
+tempfile = "3.23.0"
 serial_test = "3.2.0"
 
 [profile.release]
