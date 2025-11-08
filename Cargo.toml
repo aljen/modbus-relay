@@ -1,6 +1,6 @@
 [package]
 name = "modbus-relay"
-version = "2024.12.0"
+version = "2025.11.0"
 edition = "2024"
 authors = ["Artur Wyszyński <artur.wyszynski@wildpixelgames.com>"]
 description = "A high performance Modbus TCP to RTU relay"
@@ -97,7 +97,7 @@ tag-name = "v{{version}}"
 
 [package.metadata.deb]
 maintainer = "Artur Wyszyński <artur.wyszynski@wildpixelgames.com>"
-copyright = "2024, Artur Wyszyński <artur.wyszynski@wildpixelgames.com>"
+copyright = "2024-2025, Artur Wyszyński <artur.wyszynski@wildpixelgames.com>"
 extended-description = """
 High-performance Modbus TCP to RTU relay service.
 Supports various temperature sensors and provides efficient data relay capabilities.
