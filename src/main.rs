@@ -34,7 +34,9 @@ struct CommonArgs {
     debug: bool,
 }
 
-pub fn setup_logging(config: &RelayConfig) -> Result<(impl Drop, impl Drop), RelayError> {
+pub fn setup_logging(
+    config: &RelayConfig,
+) -> Result<(impl Drop + use<>, impl Drop + use<>), RelayError> {
     let timer = OffsetTime::new(
         UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC),
         time::format_description::well_known::Rfc3339,

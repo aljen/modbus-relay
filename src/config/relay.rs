@@ -282,10 +282,10 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn test_env_override() {
-        std::env::set_var("MODBUS_RELAY_TCP__BIND_PORT", "5000");
+        unsafe { std::env::set_var("MODBUS_RELAY_TCP__BIND_PORT", "5000") };
         let config = Config::new().unwrap();
         assert_eq!(config.tcp.bind_port, 5000);
-        std::env::remove_var("MODBUS_RELAY_TCP__BIND_PORT");
+        unsafe { std::env::remove_var("MODBUS_RELAY_TCP__BIND_PORT") };
     }
 
     #[test]
@@ -391,8 +391,8 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn test_validation() {
-        std::env::set_var("MODBUS_RELAY_TCP__BIND_PORT", "0");
+        unsafe { std::env::set_var("MODBUS_RELAY_TCP__BIND_PORT", "0") };
         assert!(Config::new().is_err());
-        std::env::remove_var("MODBUS_RELAY_TCP__BIND_PORT");
+        unsafe { std::env::remove_var("MODBUS_RELAY_TCP__BIND_PORT") };
     }
 }
