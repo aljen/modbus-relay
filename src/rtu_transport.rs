@@ -42,7 +42,7 @@ impl RtuTransport {
             .map_err(|e| TransportError::Io {
                 operation: IoOperation::Configure,
                 details: format!("serial port {}", config.device),
-                source: std::io::Error::new(std::io::ErrorKind::Other, e.description),
+                source: std::io::Error::other(e.description),
             })?;
 
         #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -80,7 +80,7 @@ impl RtuTransport {
             .map_err(|e| TransportError::Io {
                 operation: IoOperation::Flush,
                 details: "Failed to clear buffers".to_string(),
-                source: std::io::Error::new(std::io::ErrorKind::Other, e.description),
+                source: std::io::Error::other(e.description),
             })?;
 
         #[cfg(unix)]

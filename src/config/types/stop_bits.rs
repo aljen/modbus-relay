@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StopBits {
+    #[default]
     One,
     Two,
 }
@@ -13,12 +14,6 @@ impl From<StopBits> for serialport::StopBits {
             StopBits::One => serialport::StopBits::One,
             StopBits::Two => serialport::StopBits::Two,
         }
-    }
-}
-
-impl Default for StopBits {
-    fn default() -> Self {
-        Self::One
     }
 }
 

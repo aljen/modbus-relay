@@ -151,20 +151,19 @@ async fn main() {
         error!("Fatal error: {:#}", e);
         if let Some(RelayError::Transport(TransportError::Io { details, .. })) =
             e.downcast_ref::<RelayError>()
+            && details.contains("serial port")
         {
-            if details.contains("serial port") {
-                error!(
-                    "Hint: Make sure the configured serial port exists and you have permission to access it"
-                );
-                #[cfg(target_os = "macos")]
-                error!(
-                    "Hint: On macOS, you might need to install the driver from https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers"
-                );
-                #[cfg(target_os = "linux")]
-                error!(
-                    "Hint: On Linux, you might need to add your user to the dialout group: sudo usermod -a -G dialout $USER"
-                );
-            }
+            error!(
+                "Hint: Make sure the configured serial port exists and you have permission to access it"
+            );
+            #[cfg(target_os = "macos")]
+            error!(
+                "Hint: On macOS, you might need to install the driver from https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers"
+            );
+            #[cfg(target_os = "linux")]
+            error!(
+                "Hint: On Linux, you might need to add your user to the dialout group: sudo usermod -a -G dialout $USER"
+            );
         }
         process::exit(1);
     }

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RtsType {
     /// RTS disabled
@@ -8,6 +8,7 @@ pub enum RtsType {
     /// RTS = High during transmission
     Up,
     /// RTS = LOW during transmission
+    #[default]
     Down,
 }
 
@@ -18,12 +19,6 @@ impl RtsType {
             RtsType::Up => is_transmitting,
             RtsType::Down => !is_transmitting,
         }
-    }
-}
-
-impl Default for RtsType {
-    fn default() -> Self {
-        Self::Down
     }
 }
 

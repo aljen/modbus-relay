@@ -73,10 +73,10 @@ impl Stats {
         let mut recent_requests = 0;
 
         for client in stats.values() {
-            if let Ok(duration) = now.duration_since(client.last_active) {
-                if duration <= window {
-                    recent_requests += client.total_requests as usize;
-                }
+            if let Ok(duration) = now.duration_since(client.last_active)
+                && duration <= window
+            {
+                recent_requests += client.total_requests as usize;
             }
         }
 

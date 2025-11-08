@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Parity {
+    #[default]
     None,
     Odd,
     Even,
@@ -15,12 +16,6 @@ impl From<Parity> for serialport::Parity {
             Parity::Odd => serialport::Parity::Odd,
             Parity::Even => serialport::Parity::Even,
         }
-    }
-}
-
-impl Default for Parity {
-    fn default() -> Self {
-        Self::None
     }
 }
 

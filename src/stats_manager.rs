@@ -110,10 +110,10 @@ impl StatsManager {
             }
 
             StatEvent::QueryStats { addr, response_tx } => {
-                if let Some(stats) = stats.get(&addr) {
-                    if response_tx.send(stats.clone()).is_err() {
-                        warn!("Failed to send stats for {}", addr);
-                    }
+                if let Some(stats) = stats.get(&addr)
+                    && response_tx.send(stats.clone()).is_err()
+                {
+                    warn!("Failed to send stats for {}", addr);
                 }
             }
 

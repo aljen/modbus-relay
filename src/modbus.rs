@@ -73,7 +73,7 @@ pub fn guess_response_size(function: u8, quantity: u16) -> usize {
         0x01 | 0x02 => {
             // Read Coils / Read Discrete Inputs
             // Each coil status is one bit; calculate the number of data bytes required
-            let data_bytes = ((quantity as usize) + 7) / 8; // Round up to the nearest whole byte
+            let data_bytes = (quantity as usize).div_ceil(8); // Round up to the nearest whole byte
             // Response size: Address(1) + Function(1) + Byte Count(1) + Data + CRC(2)
             1 + 1 + 1 + data_bytes + 2
         }
